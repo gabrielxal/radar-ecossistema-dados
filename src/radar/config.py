@@ -62,3 +62,18 @@ def fqn(schema: str, tabela: str, catalog: str = CATALOG) -> str:
     Existe para que nenhum notebook escreva o nome da tabela a mao.
     """
     return f"{catalog}.{schema}.{tabela}"
+
+
+# --------------------------------------------------------------------------
+# Politica de retry
+# --------------------------------------------------------------------------
+
+# Quantas tentativas antes de desistir de uma requisicao.
+MAX_TENTATIVAS = 5
+
+# Segundos da primeira espera. Dobra a cada tentativa: 2, 4, 8, 16...
+BACKOFF_BASE = 2
+
+# Teto da espera. Se a quota zerou de vez, dormir uma hora nao e retry --
+# e sinal de ingestao mal dimensionada. Melhor falhar e corrigir o plano.
+ESPERA_MAXIMA = 120

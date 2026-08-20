@@ -10,12 +10,23 @@ e Resposta e o "result set".
 
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import dataclass
 from typing import Any, Iterator
 
 import requests
 
-from radar.config import API_BASE, API_VERSION, PER_PAGE, TIMEOUT, USER_AGENT
+from radar.config import (
+    API_BASE,
+    API_VERSION,
+    BACKOFF_BASE,
+    ESPERA_MAXIMA,
+    MAX_TENTATIVAS,
+    PER_PAGE,
+    TIMEOUT,
+    USER_AGENT,
+)
 
 
 
@@ -117,22 +128,38 @@ class GitHubClient:
         except (TypeError, ValueError):
             return None
 
-    def get(
-        self,
-        caminho_ou_url: str,
-        params: dict | None = None,
-        etag: str | None = None,
-    ) -> Resposta:
-        """Faz um GET e traduz a resposta HTTP no contrato Resposta."""
-        url = self._url(caminho_ou_url)
+    def _esperar(
+        self, tentativa: int, resposta: requests.Response | None = None
+    ) -> None:
+        """Espera antes de retentar: backoff exponencial com jitter.
 
-        # Se temos um ETag guardado, perguntamos "mudou?" em vez de
-        # pedir o conteudo. Se nada mudou, a API responde 304 e nao
-        # consome quota.
-        headers = {"If-None-Match": etag} if etag else None
+        Backoff exponencial: 2s, 4s, 8s, 16s... Insistir no mesmo ritmo em
+        servidor sobrecarregado so piora a sobrecarga.
 
-        r = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
+        Jitter: se varios processos falharem juntos, sem ruido todos
+        retentariam no mesmo instante. O ruido espalha as tentativas.
+        """
+        espera = BACKOFF_BASE * (2 ** (tentativa - 1))
 
+        if resposta is not None:
+            # A API pode dizer explicitamente quanto esperar.
+            retry_after = self._para_int(resposta.headers.get("Retry-After"))
+            if retry_after:
+                espera = max(espera, retry_after)
+            elif resposta.headers.get("X-RateLimit-Remaining") == "0":
+                # Quota zerada: e inutil tentar antes do reset.
+                reset = self._para_int(resposta.headers.get("X-RateLimit-Reset"))
+                if reset:
+                    espera = max(espera, reset - time.time() + 1)
+
+        espera = min(espera, ESPERA_MAXIMA)
+        espera += random.uniform(0, espera * 0.25)
+
+        print(f"    [retry] tentativa {tentativa} falhou; aguardando {espera:.1f}s")
+        time.sleep(espera)
+
+    def _montar_resposta(self, r: requests.Response, url: str) -> Resposta:
+        """Traduz a resposta HTTP no contrato Resposta."""
         # 304 e checado ANTES de r.ok: nao e erro, mas tambem nao tem
         # corpo -- chamar r.json() aqui estouraria.
         if r.status_code == 304:
@@ -141,7 +168,7 @@ class GitHubClient:
             dados = r.json() if r.content else None
         else:
             # Falha explicita. Devolver None faria o pipeline seguir com
-            # dado faltando, em silencio. (Retry vem no passo 1.5.)
+            # dado faltando, em silencio.
             raise ErroGitHub(r.status_code, url, r.text)
 
         return Resposta(
@@ -153,6 +180,50 @@ class GitHubClient:
             rate_remaining=self._para_int(r.headers.get("X-RateLimit-Remaining")),
             rate_reset=self._para_int(r.headers.get("X-RateLimit-Reset")),
         )
+
+    def get(
+        self,
+        caminho_ou_url: str,
+        params: dict | None = None,
+        etag: str | None = None,
+    ) -> Resposta:
+        """Faz um GET com retry automatico em falhas transitorias.
+
+        Retenta apenas o que faz sentido retentar: falha de rede, 429 e 5xx.
+        NAO retenta 401/403/404 -- o erro e nosso, e insistir gasta quota.
+        """
+        url = self._url(caminho_ou_url)
+
+        # Com ETag guardado, perguntamos "mudou?" em vez de pedir o
+        # conteudo. Se nada mudou, a API responde 304 sem consumir quota.
+        headers = {"If-None-Match": etag} if etag else None
+
+        motivo = "desconhecido"
+
+        for tentativa in range(1, MAX_TENTATIVAS + 1):
+            ultima = tentativa == MAX_TENTATIVAS
+
+            try:
+                r = self.session.get(
+                    url, params=params, headers=headers, timeout=self.timeout
+                )
+            except (requests.Timeout, requests.ConnectionError) as erro:
+                motivo = f"falha de rede ({erro.__class__.__name__})"
+                if not ultima:
+                    self._esperar(tentativa)
+                continue
+
+            if r.status_code == 429 or r.status_code >= 500:
+                motivo = f"HTTP {r.status_code}"
+                if not ultima:
+                    # Passa a resposta: ela pode trazer Retry-After.
+                    self._esperar(tentativa, r)
+                continue
+
+            return self._montar_resposta(r, url)
+
+        raise ErroGitHub(0, url, f"desisti apos {MAX_TENTATIVAS} tentativas: {motivo}")
+
     def paginar(
         self,
         caminho: str,
