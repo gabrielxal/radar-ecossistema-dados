@@ -504,7 +504,7 @@ Regra que resume todas: **tipo não é detalhe de implementação, é contrato.*
 ### 8.1 Lógica em `src/`, orquestração em `notebooks/`
 
 ```
-radar_ecossistema_dados/
+radar-ecossistema-dados/
 ├── src/radar/          # lógica: Python puro, testável, importável
 ├── notebooks/          # orquestração fina: lê, chama função, escreve
 ├── tests/              # pytest — roda no CI, sem cluster
