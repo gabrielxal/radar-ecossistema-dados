@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from radar.config import PER_PAGE
-from radar.controle import Checkpoint, parametros_de_busca
+from radar.controle import Checkpoint, calcular_watermark, parametros_de_busca
 
 
 @dataclass(frozen=True)
@@ -103,6 +103,45 @@ def maior_data(registros: list[dict], campo_data: str) -> datetime | None:
         if d is not None
     ]
     return max(datas) if datas else None
+
+
+def checkpoint_inicial(
+    repo: str, endpoint: str, momento: datetime, dias_historico: int
+) -> Checkpoint | None:
+    """Checkpoint sintetico que limita a primeira carga a uma janela.
+
+    Sem ele, a primeira execucao pagina o historico inteiro do repositorio e
+    estoura a quota.
+    """
+    if dias_historico <= 0:
+        return None
+    return Checkpoint(
+        repo=repo,
+        endpoint=endpoint,
+        watermark=momento - timedelta(days=dias_historico),
+    )
+
+
+def proximo_checkpoint(
+    anterior: Checkpoint | None,
+    resultado: "ResultadoIngestao",
+    momento: datetime,
+) -> Checkpoint:
+    """Checkpoint a gravar depois de uma ingestao."""
+    watermark = calcular_watermark(resultado.maior_data)
+    if watermark is None and anterior is not None:
+        watermark = anterior.watermark  # nada novo: preserva o watermark anterior
+
+    return Checkpoint(
+        repo=resultado.repo,
+        endpoint=resultado.endpoint,
+        watermark=watermark,
+        etag=resultado.etag,
+        ultima_execucao=momento,
+        status="erro" if resultado.erro else "ok",
+        mensagem=resultado.erro,
+        registros=resultado.registros,
+    )
 
 
 def gravar_jsonl(caminho: str, registros: list[dict]) -> int:

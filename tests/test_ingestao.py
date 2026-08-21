@@ -207,3 +207,52 @@ def test_etag_novo_e_propagado_para_o_resultado(tmp_path):
     r = ingerir(cliente, COMMITS, "x/y", None, str(tmp_path), datetime(2026, 8, 21))
 
     assert r.etag == 'W/"recem-vindo"'
+
+
+# --------------------------------------------------------------------------
+# Checkpoint inicial e proximo checkpoint
+# --------------------------------------------------------------------------
+
+def test_checkpoint_inicial_limita_a_janela():
+    from radar.ingestao import checkpoint_inicial
+
+    ck = checkpoint_inicial("x/y", "commits", datetime(2026, 8, 21), dias_historico=90)
+    assert ck.watermark == datetime(2026, 5, 23)
+
+
+def test_checkpoint_inicial_zero_dias_e_carga_completa():
+    from radar.ingestao import checkpoint_inicial
+
+    assert checkpoint_inicial("x/y", "commits", datetime(2026, 8, 21), 0) is None
+
+
+def test_proximo_checkpoint_avanca_com_sobreposicao(tmp_path):
+    from radar.ingestao import proximo_checkpoint
+
+    cliente = ClienteFalso(paginas=[commit("a", "2026-08-20T10:00:00Z")])
+    r = ingerir(cliente, COMMITS, "x/y", None, str(tmp_path), datetime(2026, 8, 21))
+
+    ck = proximo_checkpoint(None, r, datetime(2026, 8, 21))
+
+    # maior data 2026-08-20 menos 1 dia de sobreposicao
+    assert ck.watermark == datetime(2026, 8, 19, 10, 0, 0, tzinfo=timezone.utc)
+    assert ck.registros == 1
+    assert ck.status == "ok"
+
+
+def test_proximo_checkpoint_preserva_watermark_quando_nada_muda(tmp_path):
+    from radar.ingestao import proximo_checkpoint
+
+    anterior = Checkpoint(
+        repo="x/y",
+        endpoint="commits",
+        watermark=datetime(2026, 8, 18, 3, 0, 0, tzinfo=timezone.utc),
+        etag='W/"antigo"',
+    )
+    cliente = ClienteFalso(sentinela_status=304)
+    r = ingerir(cliente, COMMITS, "x/y", anterior, str(tmp_path), datetime(2026, 8, 21))
+
+    ck = proximo_checkpoint(anterior, r, datetime(2026, 8, 21))
+
+    assert ck.watermark == anterior.watermark  # nao volta para None
+    assert ck.registros == 0
