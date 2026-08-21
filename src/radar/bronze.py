@@ -99,10 +99,6 @@ def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
     """
     from pyspark.sql import functions as F
 
-    # Sem isso o Spark infere `dt=2026-08-21` como DATE. Na bronze, particao
-    # tambem e STRING.
-    spark.conf.set("spark.sql.sources.partitionColumnTypeInference.enabled", "false")
-
     bruto = (
         spark.read
         .option("pathGlobFilter", "*.jsonl")
@@ -111,8 +107,15 @@ def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
 
     return bruto.select(
         F.get_json_object(F.col("value"), f"$.{endpoint.chave}").alias(endpoint.chave),
-        F.regexp_replace(F.col("repo"), REGEX_REPO, SUBST_REPO_SQL).alias("repo"),
-        F.col("dt").alias("dt"),
+        # `.cast("string")` nas duas colunas de particao: o Spark infere o
+        # tipo do valor no caminho e transformaria `dt=2026-08-21` em DATE.
+        # Na bronze, particao tambem e STRING. O cast resolve na projecao --
+        # desligar a inferencia exigiria uma spark.conf que o Serverless nao
+        # deixa alterar.
+        F.regexp_replace(
+            F.col("repo").cast("string"), REGEX_REPO, SUBST_REPO_SQL
+        ).alias("repo"),
+        F.col("dt").cast("string").alias("dt"),
         F.col("value").alias("payload"),
         F.lit(momento).cast("timestamp").alias("_ingerido_em"),
         # Coluna oculta que todo file source expoe. A proveniencia vem de
