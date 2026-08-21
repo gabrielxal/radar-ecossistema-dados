@@ -594,11 +594,18 @@ local que não existe em outra máquina.
 | Ambiente | Mecanismo | Estado |
 |---|---|---|
 | Local | `.env` ignorado pelo Git; `.env.example` versionado documenta o contrato | ✅ implementado |
-| Databricks | Secret Scope (`dbutils.secrets.get`) — o token não aparece em tela nem no log | ⏳ a confirmar no Free Edition |
+| Databricks | Secret Scope `radar/github_token` (`dbutils.secrets.get`) — o token não aparece em tela nem no log | ✅ disponível no Free Edition, implementado em `notebooks/01_setup_credenciais.py` |
 
 Se o Secret Scope não estiver disponível, o plano B é `dbutils.widgets` — funciona, mas é
 inferior porque o valor fica no histórico do job. **A limitação será documentada aqui, não
 escondida.**
+
+**Separação de notebooks de setup.** O provisionamento de credencial vive em
+`01_setup_credenciais.py`, separado de `00_setup_catalogo.py`. Motivo principal: o notebook
+de credencial **exige entrada humana** (o token é digitado num widget) e por isso não pode ser
+automatizado num job. Mantê-lo junto do setup de catálogo tornaria aquele inautomatizável
+também. Os dois também têm ciclos de vida distintos — o catálogo muda com a estrutura do
+projeto; o token, a cada rotação (~90 dias).
 
 **Princípio do menor privilégio** aplicado em três frentes: token *fine-grained* e
 *read-only* sobre repositórios públicos; política de execução do PowerShell ajustada em
