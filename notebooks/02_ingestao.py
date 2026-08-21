@@ -63,6 +63,30 @@ print("execucao:", agora.isoformat())
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## Pre-voo
+# MAGIC
+# MAGIC A tabela de controle e o Volume sao criados pelo `00_setup_catalogo`.
+# MAGIC Conferir aqui, antes de gastar quota, troca um
+# MAGIC `TABLE_OR_VIEW_NOT_FOUND` no meio do laco por uma mensagem que diz o
+# MAGIC que fazer.
+
+# COMMAND ----------
+
+FALTA_SETUP = "Rode notebooks/00_setup_catalogo.py antes desta ingestao."
+
+if not spark.catalog.tableExists(controle.TABELA_CONTROLE):
+    raise RuntimeError(f"tabela {controle.TABELA_CONTROLE} nao existe. {FALTA_SETUP}")
+
+try:
+    dbutils.fs.ls(CAMINHO_VOLUME)
+except Exception as erro:
+    raise RuntimeError(f"volume {CAMINHO_VOLUME} nao existe. {FALTA_SETUP}") from erro
+
+print("pre-voo ok:", controle.TABELA_CONTROLE, "|", CAMINHO_VOLUME)
+
+# COMMAND ----------
+
 # Sonda com chamada real: /rate_limit devolve valor em cache.
 def sonda() -> int:
     return cliente.get(f"/repos/{REPOS_ALVO[0]}").rate_remaining
@@ -84,14 +108,18 @@ print("quota antes:", quota_inicial)
 resultados = []
 
 for repo in REPOS_ALVO:
-    anterior = controle.ler(spark, repo, ENDPOINT.nome)
-
-    if anterior is None:
-        anterior = ingestao.checkpoint_inicial(
-            repo, ENDPOINT.nome, agora, DIAS_HISTORICO
-        )
+    # Inicializado antes do try: o except abaixo usa `anterior`, que pode
+    # nao ter sido atribuido se a propria leitura falhar.
+    anterior = None
 
     try:
+        anterior = controle.ler(spark, repo, ENDPOINT.nome)
+
+        if anterior is None:
+            anterior = ingestao.checkpoint_inicial(
+                repo, ENDPOINT.nome, agora, DIAS_HISTORICO
+            )
+
         resultado = ingestao.ingerir(
             cliente=cliente,
             endpoint=ENDPOINT,
