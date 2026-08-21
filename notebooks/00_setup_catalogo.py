@@ -84,3 +84,105 @@ try:
 except Exception as erro:
     print("SECRET SCOPE INDISPONIVEL:", type(erro).__name__)
     print(erro)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Secret Scope
+# MAGIC
+# MAGIC O token do GitHub vai para um Secret Scope, nao para o codigo nem
+# MAGIC para uma variavel de ambiente do cluster. O Databricks **redige**
+# MAGIC automaticamente o valor em qualquer saida de celula -- por isso
+# MAGIC abaixo so imprimimos o tamanho, nunca o conteudo.
+
+# COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+
+ESCOPO = "radar"
+CHAVE = "github_token"
+
+w = WorkspaceClient()
+existentes = [e.name for e in w.secrets.list_scopes()]
+
+if ESCOPO not in existentes:
+    w.secrets.create_scope(scope=ESCOPO)
+    print("escopo criado:", ESCOPO)
+else:
+    print("escopo ja existe:", ESCOPO)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Rode a celula abaixo, cole o token no campo que aparece no topo do
+# MAGIC notebook, rode a celula seguinte **uma vez**, e depois **limpe o campo**.
+# MAGIC
+# MAGIC O valor digitado no widget nao fica no arquivo `.py` versionado no Git.
+
+# COMMAND ----------
+
+dbutils.widgets.text("github_token", "", "Token do GitHub (limpar apos gravar)")
+
+# COMMAND ----------
+
+_token = dbutils.widgets.get("github_token").strip()
+
+if _token:
+    w.secrets.put_secret(scope=ESCOPO, key=CHAVE, string_value=_token)
+    print("segredo gravado. LIMPE O CAMPO DO WIDGET agora.")
+else:
+    print("campo vazio -- nada gravado (esperado se o segredo ja existe).")
+
+del _token
+
+# COMMAND ----------
+
+# Verificacao: le o segredo e mostra apenas o tamanho.
+_t = dbutils.secrets.get(scope=ESCOPO, key=CHAVE)
+print("segredo acessivel | tamanho:", len(_t), "caracteres")
+del _t
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Tabela de controle
+# MAGIC
+# MAGIC A memoria do pipeline. Grao: um par (repositorio, endpoint).
+# MAGIC Guarda o watermark e o ETag da ultima execucao bem-sucedida.
+
+# COMMAND ----------
+
+from radar import controle
+
+controle.criar_tabela(spark)
+print("tabela pronta:", controle.TABELA_CONTROLE)
+
+# COMMAND ----------
+
+display(spark.sql(f"DESCRIBE TABLE {controle.TABELA_CONTROLE}"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Chave primaria informativa
+# MAGIC
+# MAGIC O Unity Catalog aceita declarar chave primaria, mas **nao a impoe**:
+# MAGIC a constraint documenta a intencao e ajuda ferramentas de BI e de
+# MAGIC lineage. Quem realmente garante uma linha por par (repo, endpoint)
+# MAGIC e o `MERGE` em `controle.salvar()`.
+
+# COMMAND ----------
+
+try:
+    spark.sql(
+        f"ALTER TABLE {controle.TABELA_CONTROLE} "
+        "ADD CONSTRAINT pk_controle PRIMARY KEY (repo, endpoint)"
+    )
+    print("constraint de chave primaria registrada")
+except Exception as erro:
+    print("constraint nao aplicada:", type(erro).__name__, "-- o pipeline segue sem ela")
+
+# COMMAND ----------
+
+# Tabela vazia na primeira execucao -- esperado.
+display(controle.listar(spark))
