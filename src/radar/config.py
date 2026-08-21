@@ -1,8 +1,4 @@
-"""Configuracao central do projeto.
-
-Somente constantes e funcoes puras. Este modulo e importado por todos os
-outros, entao nao pode ter dependencia externa nem efeito colateral.
-"""
+"""Constantes do projeto. Sem dependencia externa e sem efeito colateral."""
 
 # --------------------------------------------------------------------------
 # API do GitHub
@@ -10,18 +6,29 @@ outros, entao nao pode ter dependencia externa nem efeito colateral.
 
 API_BASE = "https://api.github.com"
 
-# Versao fixada: o GitHub evolui a API e uma mudanca de contrato quebraria
-# o pipeline sem que nada tenha mudado no nosso codigo.
+# Versao fixada para o pipeline nao quebrar quando a API evoluir.
 API_VERSION = "2022-11-28"
 
-# O GitHub exige User-Agent e o usa para contato em caso de uso abusivo.
+# Exigido pelo GitHub.
 USER_AGENT = "radar-ecossistema-dados"
 
-# 100 e o maximo. Menos paginas = menos requisicoes = menos quota.
+# 100 e o maximo aceito por pagina.
 PER_PAGE = 100
 
-# requests NAO tem timeout por padrao: sem isto, uma chamada trava o job.
+# requests nao tem timeout por padrao.
 TIMEOUT = 30
+
+# --------------------------------------------------------------------------
+# Politica de retry
+# --------------------------------------------------------------------------
+
+MAX_TENTATIVAS = 5
+
+# Segundos da primeira espera; dobra a cada tentativa.
+BACKOFF_BASE = 2
+
+# Teto da espera, em segundos.
+ESPERA_MAXIMA = 120
 
 # --------------------------------------------------------------------------
 # Lakehouse
@@ -37,7 +44,7 @@ VOLUME = "raw"
 # Escopo da analise
 # --------------------------------------------------------------------------
 
-# Tupla, nao lista: imutavel. Ninguem faz REPOS.append() por engano.
+# Tupla para nao ser alterada em tempo de execucao.
 REPOS = (
     "apache/airflow",
     "apache/spark",
@@ -57,23 +64,5 @@ REPOS = (
 
 
 def fqn(schema: str, tabela: str, catalog: str = CATALOG) -> str:
-    """Nome totalmente qualificado: catalog.schema.tabela.
-
-    Existe para que nenhum notebook escreva o nome da tabela a mao.
-    """
+    """Nome totalmente qualificado: catalog.schema.tabela."""
     return f"{catalog}.{schema}.{tabela}"
-
-
-# --------------------------------------------------------------------------
-# Politica de retry
-# --------------------------------------------------------------------------
-
-# Quantas tentativas antes de desistir de uma requisicao.
-MAX_TENTATIVAS = 5
-
-# Segundos da primeira espera. Dobra a cada tentativa: 2, 4, 8, 16...
-BACKOFF_BASE = 2
-
-# Teto da espera. Se a quota zerou de vez, dormir uma hora nao e retry --
-# e sinal de ingestao mal dimensionada. Melhor falhar e corrigir o plano.
-ESPERA_MAXIMA = 120

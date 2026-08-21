@@ -1,15 +1,7 @@
-"""Memoria do pipeline: onde cada ingestao parou.
+"""Tabela de controle da ingestao: watermark e ETag por (repo, endpoint).
 
-A tabela de controle guarda, por (repositorio, endpoint), o watermark e o
-ETag da ultima execucao bem-sucedida. E ela que transforma um script que
-roda uma vez num processo que roda todo dia sem refazer trabalho.
-
-DECISAO: o objeto `spark` e INJETADO em toda funcao, nunca importado no
-topo deste modulo. Motivos:
-  - o modulo continua importavel fora do Databricks (pytest, IDE, CI);
-  - as funcoes puras podem ser testadas sem cluster nenhum;
-  - e o mesmo padrao de injecao de dependencia usado no GitHubClient.
-Os imports de pyspark ficam DENTRO das funcoes que realmente precisam dele.
+O objeto `spark` e recebido como parametro e os imports de pyspark ficam
+dentro das funcoes, para o modulo continuar importavel fora do Databricks.
 """
 
 from __future__ import annotations
@@ -21,17 +13,13 @@ from radar.config import BRONZE, fqn
 
 TABELA_CONTROLE = fqn(BRONZE, "controle_ingestao")
 
-# Quantos dias reprocessar de proposito para capturar dado que chega com
-# data retroativa (rebase, merge de branch antiga, fuso horario do autor).
+# Dias reprocessados de proposito para capturar dado com data retroativa.
 DIAS_SOBREPOSICAO = 1
 
 
 @dataclass(frozen=True)
 class Checkpoint:
-    """Estado de uma ingestao. Uma linha da tabela de controle.
-
-    Grao: um par (repo, endpoint). Nao ha duas linhas para o mesmo par.
-    """
+    """Uma linha da tabela de controle. Grao: um par (repo, endpoint)."""
 
     repo: str
     endpoint: str
@@ -60,47 +48,30 @@ COMMENT 'Memoria do pipeline: watermark e ETag por repositorio e endpoint.'
 
 
 # --------------------------------------------------------------------------
-# Funcoes puras -- testaveis sem Spark
+# Funcoes puras
 # --------------------------------------------------------------------------
 
 def calcular_watermark(
     maior_data: datetime | None,
     dias_sobreposicao: int = DIAS_SOBREPOSICAO,
 ) -> datetime | None:
-    """Watermark a gravar: a maior data ingerida MENOS a janela de sobreposicao.
-
-    Recuar de proposito e o que captura dado que chega com data retroativa.
-    Se avancassemos ate o maximo exato, um commit datado de ontem que
-    aparecesse amanha nunca seria pego pelo filtro `since` -- perda
-    silenciosa, sem erro nenhum.
-
-    So e seguro porque a carga e idempotente (MERGE pela chave natural).
-    Sobreposicao e idempotencia sao um par: uma sem a outra nao funciona.
-    """
+    """Watermark a gravar: a maior data ingerida menos a janela de sobreposicao."""
     if maior_data is None:
         return None
     return maior_data - timedelta(days=dias_sobreposicao)
 
 
 def para_iso(momento: datetime | None) -> str | None:
-    """Formata para o parametro `since` da API: ISO 8601 em UTC.
-
-    A API do GitHub espera `2026-08-19T03:00:00Z`. Datas sem fuso sao
-    tratadas como UTC -- nunca como o fuso local da maquina, que mudaria
-    o resultado dependendo de onde o job roda.
-    """
+    """Formata para o parametro `since` da API: ISO 8601 em UTC."""
     if momento is None:
         return None
     if momento.tzinfo is None:
-        momento = momento.replace(tzinfo=timezone.utc)
+        momento = momento.replace(tzinfo=timezone.utc)  # nunca assumir fuso local
     return momento.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parametros_de_busca(checkpoint: Checkpoint | None, per_page: int) -> dict:
-    """Monta os parametros da chamada de coleta a partir do checkpoint.
-
-    Sem checkpoint (primeira execucao), nao ha `since`: a carga e completa.
-    """
+    """Parametros da coleta. Sem checkpoint nao ha `since`: a carga e completa."""
     params: dict = {"per_page": per_page}
     if checkpoint is not None:
         desde = para_iso(checkpoint.watermark)
@@ -110,11 +81,11 @@ def parametros_de_busca(checkpoint: Checkpoint | None, per_page: int) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Acesso a tabela -- exige Spark, injetado
+# Acesso a tabela
 # --------------------------------------------------------------------------
 
 def _schema():
-    """Schema explicito: nao deixamos o Spark inferir tipo de checkpoint."""
+    """Schema explicito, para o Spark nao inferir os tipos."""
     from pyspark.sql.types import (
         LongType,
         StringType,
@@ -138,7 +109,7 @@ def _schema():
 
 
 def criar_tabela(spark) -> None:
-    """Cria a tabela de controle se ela ainda nao existir. Idempotente."""
+    """Cria a tabela de controle se nao existir."""
     spark.sql(DDL_CONTROLE)
 
 
@@ -168,12 +139,7 @@ def ler(spark, repo: str, endpoint: str) -> Checkpoint | None:
 
 
 def salvar(spark, checkpoint: Checkpoint) -> None:
-    """Grava o checkpoint via MERGE pela chave (repo, endpoint).
-
-    MERGE e nao INSERT: rodar a ingestao duas vezes no mesmo dia atualiza a
-    linha existente em vez de criar uma segunda. E a mesma idempotencia que
-    exigimos dos dados, aplicada ao proprio controle.
-    """
+    """Grava o checkpoint via MERGE pela chave (repo, endpoint)."""
     df = spark.createDataFrame(
         [
             (
@@ -203,7 +169,7 @@ def salvar(spark, checkpoint: Checkpoint) -> None:
 
 
 def listar(spark):
-    """DataFrame com todos os checkpoints, para inspecao no notebook."""
+    """DataFrame com todos os checkpoints."""
     from pyspark.sql import functions as F
 
     return spark.table(TABELA_CONTROLE).orderBy(F.col("repo"), F.col("endpoint"))

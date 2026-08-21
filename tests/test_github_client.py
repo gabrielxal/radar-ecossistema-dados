@@ -1,9 +1,4 @@
-"""Testes do cliente da API. Nenhum toca na rede.
-
-A sessao HTTP e substituida por um duble (SessaoFalsa) que devolve
-respostas escritas por nos. Isso permite testar cenarios impossiveis de
-reproduzir sob demanda -- tres erros 500 seguidos, por exemplo.
-"""
+"""Testes do cliente da API. Nenhum toca na rede: a sessao HTTP e um duble."""
 
 import pytest
 
@@ -64,7 +59,7 @@ def test_headers_de_autenticacao_sao_definidos():
 
 
 def test_token_nao_vira_atributo_do_objeto():
-    """O token nao pode vazar em log, repr() ou stack trace."""
+    """Token nao pode vazar em log, repr() ou stack trace."""
     c, _ = cliente([])
     assert not hasattr(c, "token")
     assert "token-de-teste" not in repr(c.__dict__)
@@ -80,7 +75,7 @@ def test_caminho_relativo_vira_url_absoluta():
 
 
 def test_url_absoluta_passa_intacta():
-    """Necessario porque o link_next ja vem como URL pronta."""
+    """link_next ja vem como URL pronta."""
     c, _ = cliente([])
     url = "https://api.github.com/repositories/1/commits?page=2"
     assert c._url(url) == url
@@ -120,7 +115,7 @@ def test_etag_vira_header_if_none_match():
 
 
 def test_header_ausente_nao_quebra():
-    """Sem X-RateLimit-Remaining, o campo vira None em vez de estourar."""
+    """Header ausente vira None em vez de estourar."""
     c, _ = cliente([RespostaFalsa(200, corpo={})])
     r = c.get("/x")
     assert r.rate_remaining is None
@@ -146,7 +141,7 @@ def test_retenta_em_429():
 
 
 def test_nao_retenta_em_404():
-    """Erro do cliente: insistir so gastaria quota."""
+    """4xx nao e retentado."""
     c, sessao = cliente([RespostaFalsa(404)])
     with pytest.raises(ErroGitHub):
         c.get("/repos/nao/existe")

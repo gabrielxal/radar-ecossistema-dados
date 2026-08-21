@@ -1,8 +1,4 @@
-"""Testes das funcoes puras do modulo de controle.
-
-Nenhum destes testes precisa de Spark nem de Databricks: as funcoes de
-calculo foram separadas do acesso a tabela justamente para isso.
-"""
+"""Testes das funcoes puras do modulo de controle. Nao exigem Spark."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -24,7 +20,7 @@ def test_watermark_recua_a_janela_de_sobreposicao():
 
 
 def test_watermark_sem_dado_ingerido_e_none():
-    """Primeira execucao: nao ha de onde recuar."""
+    """Primeira execucao."""
     assert calcular_watermark(None) is None
 
 
@@ -34,7 +30,7 @@ def test_watermark_com_sobreposicao_zero_nao_recua():
 
 
 def test_watermark_nunca_avanca_alem_do_dado():
-    """O watermark e sempre <= a maior data ingerida. Nunca o relogio local."""
+    """Invariante: watermark <= maior data ingerida."""
     maior = datetime(2026, 8, 19, 3, 0, 0)
     assert calcular_watermark(maior) <= maior
 
@@ -49,7 +45,7 @@ def test_iso_no_formato_da_api():
 
 
 def test_iso_trata_data_sem_fuso_como_utc():
-    """Nunca usar o fuso local: mudaria o resultado conforme onde o job roda."""
+    """Data sem fuso e tratada como UTC, nao como fuso local."""
     assert para_iso(datetime(2026, 8, 18, 3, 0, 0)) == "2026-08-18T03:00:00Z"
 
 
@@ -67,7 +63,7 @@ def test_iso_de_none_e_none():
 # --------------------------------------------------------------------------
 
 def test_sem_checkpoint_a_carga_e_completa():
-    """Primeira execucao nao manda `since`: puxa tudo."""
+    """Sem checkpoint nao ha `since`."""
     params = parametros_de_busca(None, per_page=100)
     assert params == {"per_page": 100}
 
@@ -84,7 +80,7 @@ def test_com_checkpoint_manda_since():
 
 
 def test_checkpoint_sem_watermark_nao_manda_since():
-    """Repo ja registrado mas ainda sem carga bem-sucedida."""
+    """Repo registrado, mas sem carga bem-sucedida ainda."""
     ck = Checkpoint(repo="x/y", endpoint="commits", watermark=None)
     assert "since" not in parametros_de_busca(ck, per_page=50)
 
