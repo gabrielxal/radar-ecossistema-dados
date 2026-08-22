@@ -392,13 +392,6 @@ def filtrar_novos(df, checkpoint):
     return df.where(F.col("_ingerido_em") > F.lit(checkpoint.watermark))
 
 
-def maior_ingestao(df) -> datetime | None:
-    """Maior `_ingerido_em` do lote; vira o proximo watermark."""
-    from pyspark.sql import functions as F
-
-    return df.select(F.max("_ingerido_em").alias("m")).collect()[0]["m"]
-
-
 def _gravar_aprovados(spark, df) -> None:
     """Upsert por (repo, sha).
 
@@ -434,31 +427,34 @@ def carregar(spark, endpoint: Endpoint, momento: datetime) -> ResultadoSilver:
     origem = bronze.nome_tabela(endpoint)
     processo = nome_processo(endpoint)
 
+    from pyspark.sql import functions as F
+
     anterior = controle.ler(spark, origem, processo)
     novos = filtrar_novos(spark.table(origem), anterior)
+    classificado = classificar(parsear(novos), momento)
 
-    # Classificado alimenta duas saidas; sem cache, todo o `from_json` e os
-    # casts rodariam duas vezes.
-    classificado = classificar(parsear(novos), momento).cache()
+    # Uma agregacao unica em vez de tres contagens separadas. `cache()` seria
+    # o caminho natural para nao reprocessar o `from_json` e os casts a cada
+    # acao, mas persistir DataFrame nao existe no Serverless -- entao o jeito
+    # e pedir menos passagens, nao guardar o resultado.
+    medida = classificado.select(
+        F.count(F.lit(1)).alias("lidos"),
+        F.count(F.when(F.col(COLUNA_MOTIVO).isNull(), 1)).alias("aprovados"),
+        F.count(F.when(F.col(COLUNA_MOTIVO).isNotNull(), 1)).alias("rejeitados"),
+        F.max("_ingerido_em").alias("watermark"),
+    ).collect()[0]
 
-    try:
-        ok = aprovados(classificado)
-        ruins = rejeitados(classificado)
+    total = medida["lidos"]
+    n_ok = medida["aprovados"]
+    n_ruins = medida["rejeitados"]
 
-        total = classificado.count()
-        n_ok = ok.count()
-        n_ruins = ruins.count()
+    # Lote vazio nao produz watermark: preserva o anterior em vez de zerar.
+    watermark = medida["watermark"] or (anterior.watermark if anterior else None)
 
-        if n_ok:
-            _gravar_aprovados(spark, ok)
-        if n_ruins:
-            _gravar_rejeitados(spark, ruins)
-
-        watermark = maior_ingestao(classificado) if total else (
-            anterior.watermark if anterior else None
-        )
-    finally:
-        classificado.unpersist()
+    if n_ok:
+        _gravar_aprovados(spark, aprovados(classificado))
+    if n_ruins:
+        _gravar_rejeitados(spark, rejeitados(classificado))
 
     controle.salvar(
         spark,

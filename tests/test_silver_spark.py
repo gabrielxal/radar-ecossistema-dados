@@ -461,20 +461,3 @@ def test_comparacao_e_estrita_e_nao_reprocessa_a_fronteira(lote):
     # gastaria trabalho para reescrever o mesmo valor.
     checkpoint = Checkpoint(repo="b", endpoint="commits@silver", watermark=HOJE)
     assert silver.filtrar_novos(lote([ONTEM, HOJE]), checkpoint).count() == 0
-
-
-def test_proximo_watermark_e_a_maior_ingestao_do_lote(lote):
-    from pyspark.sql import functions as F
-
-    maior = silver.maior_ingestao(lote([ONTEM, HOJE]))
-    rendido = (
-        lote([ONTEM, HOJE])
-        .select(F.date_format(F.lit(maior).cast("timestamp"), "yyyy-MM-dd HH:mm:ss").alias("t"))
-        .collect()[0]["t"]
-    )
-    assert rendido == "2026-08-22 12:00:00"
-
-
-def test_lote_vazio_nao_produz_watermark(lote):
-    assert silver.maior_ingestao(lote([])) is None
-
