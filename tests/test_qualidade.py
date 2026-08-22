@@ -104,3 +104,37 @@ def test_reconciliacao_acusa_linha_perdida_no_caminho():
     r = qualidade.Reconciliacao(na_origem=200, na_bronze=198)
     assert not r.bate
     assert r.diferenca == 2
+
+
+def test_reconciliacao_vira_regra_bloqueante_da_bateria():
+    r = qualidade.Reconciliacao(na_origem=200, na_bronze=198).como_resultado()
+    assert r.nome == qualidade.RECONCILIACAO
+    assert r.severidade == qualidade.BLOQUEIA
+    assert not r.passou
+
+
+def test_reconciliacao_guarda_as_duas_contagens():
+    # E o que responde "quanto a landing zone tinha naquele dia".
+    r = qualidade.Reconciliacao(na_origem=200, na_bronze=200).como_resultado()
+    assert (r.esperado, r.obtido) == (200, 200)
+    assert r.passou
+
+
+def test_reconciliacao_conta_violacao_nos_dois_sentidos():
+    # Bronze com linha a MAIS tambem e defeito: arquivo sumiu da landing zone
+    # ou alguem inseriu por fora do pipeline.
+    sobra = qualidade.Reconciliacao(na_origem=198, na_bronze=200).como_resultado()
+    assert sobra.violacoes == 2
+    assert not sobra.passou
+
+
+def test_reconciliacao_reprovada_interrompe_a_execucao():
+    recon = qualidade.Reconciliacao(na_origem=200, na_bronze=198).como_resultado()
+    with pytest.raises(AssertionError, match=qualidade.RECONCILIACAO):
+        qualidade.levantar_se_bloqueou([recon])
+
+
+def test_regra_comum_nao_preenche_as_contagens():
+    # `esperado` seria sempre 0 nas regras de violacao e nao diria nada.
+    r = resultado("chave_duplicada", qualidade.BLOQUEIA, 0)
+    assert r.esperado is None and r.obtido is None

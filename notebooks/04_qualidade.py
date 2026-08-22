@@ -69,6 +69,10 @@ print("pre-voo ok")
 # MAGIC O numero de linhas da landing zone (ja deduplicada) tem que ser igual
 # MAGIC ao da bronze. Diferenca positiva significa linha que existe no arquivo
 # MAGIC e nao chegou na tabela -- perda silenciosa, o pior tipo.
+# MAGIC
+# MAGIC Ela vira uma regra da bateria (`reconciliacao_landing_bronze`), com as
+# MAGIC contagens gravadas em `esperado` e `obtido`. E o que permite perguntar
+# MAGIC depois quantas linhas a landing zone tinha numa data passada.
 
 # COMMAND ----------
 
@@ -78,8 +82,9 @@ print(f"na landing zone (deduplicada) : {recon.na_origem}")
 print(f"na bronze                     : {recon.na_bronze}")
 print(f"diferenca                     : {recon.diferenca}")
 
-assert recon.bate, "a bronze nao reflete a landing zone"
-print("reconciliacao ok")
+# Sem `assert` aqui de proposito: a reconciliacao entra na bateria como as
+# demais regras e e cobrada no fim, depois de gravada. Interromper agora
+# deixaria a execucao reprovada fora do historico.
 
 # COMMAND ----------
 
@@ -97,11 +102,16 @@ for v in bateria:
 
 # COMMAND ----------
 
-resultados = qualidade.executar(spark, bateria)
+# A contagem de controle na frente: e a unica que pega perda silenciosa,
+# e agora carrega historico igual as demais.
+resultados = [recon.como_resultado()] + qualidade.executar(spark, bateria)
 
 for r in resultados:
     marca = "ok  " if r.passou else "FALHA"
-    print(f"[{marca}] {r.nome:<28} violacoes: {r.violacoes}")
+    linha = f"[{marca}] {r.nome:<28} violacoes: {r.violacoes}"
+    if r.esperado is not None:
+        linha += f"  (esperado {r.esperado}, obtido {r.obtido})"
+    print(linha)
 
 bloqueios, avisos = qualidade.resumo(resultados)
 print()
@@ -164,7 +174,8 @@ display(
 display(
     spark.sql(
         f"""
-        SELECT executado_em, verificacao, severidade, violacoes, passou
+        SELECT executado_em, verificacao, severidade,
+               violacoes, passou, esperado, obtido
         FROM {qualidade.TABELA_QUALIDADE}
         WHERE tabela = '{TABELA}'
         ORDER BY executado_em DESC, severidade, verificacao
@@ -195,6 +206,32 @@ display(
         WHERE tabela = '{TABELA}'
         GROUP BY verificacao
         ORDER BY reprovacoes DESC, verificacao
+        """
+    )
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Volume ao longo do tempo
+# MAGIC
+# MAGIC A serie que so existe porque a contagem de controle passou a ser
+# MAGIC gravada. Queda de volume entre duas execucoes e sintoma -- de ETag
+# MAGIC pulando o que nao devia, de watermark adiantado, de arquivo removido
+# MAGIC da landing zone.
+
+# COMMAND ----------
+
+display(
+    spark.sql(
+        f"""
+        SELECT executado_em, esperado AS na_landing_zone, obtido AS na_bronze,
+               esperado - obtido AS diferenca
+        FROM {qualidade.TABELA_QUALIDADE}
+        WHERE tabela = '{TABELA}'
+          AND verificacao = '{qualidade.RECONCILIACAO}'
+        ORDER BY executado_em DESC
+        LIMIT 30
         """
     )
 )
