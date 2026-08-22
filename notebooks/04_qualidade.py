@@ -15,11 +15,6 @@
 
 # COMMAND ----------
 
-# MAGIC %load_ext autoreload
-# MAGIC %autoreload 2
-
-# COMMAND ----------
-
 import os
 import sys
 from datetime import datetime, timezone
@@ -27,6 +22,10 @@ from datetime import datetime, timezone
 REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
+
+# Modulo ja importado fica em cache na sessao. Se uma mudanca em `src/` vinda
+# do `git pull` nao surtir efeito, rode `dbutils.library.restartPython()` numa
+# celula e execute o notebook do topo.
 
 from radar import bronze, controle, ingestao, qualidade
 from radar.config import BRONZE, CATALOG, VOLUME
