@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from radar import bronze
+from radar import bronze, silver
 from radar.config import BRONZE, REPOS, fqn
 from radar.ingestao import Endpoint
 
@@ -22,9 +22,10 @@ BLOQUEIA = "bloqueia"
 AVISA = "avisa"
 SEVERIDADES = (BLOQUEIA, AVISA)
 
-# A contagem de controle nao e um SQL sobre uma tabela unica, mas entra na
+# As contagens de controle nao sao SQL sobre uma tabela unica, mas entram na
 # bateria com o mesmo formato das demais para compartilhar o historico.
-RECONCILIACAO = "reconciliacao_landing_bronze"
+RECONCILIACAO_BRONZE = "reconciliacao_landing_bronze"
+RECONCILIACAO_SILVER = "reconciliacao_bronze_silver"
 
 
 @dataclass(frozen=True)
@@ -55,14 +56,15 @@ class Resultado:
 
 @dataclass(frozen=True)
 class Reconciliacao:
-    """Contagem de controle entre a landing zone e a bronze."""
+    """Contagem de controle entre duas camadas: quanto entrou, quanto saiu."""
 
+    nome: str
     na_origem: int
-    na_bronze: int
+    no_destino: int
 
     @property
     def diferenca(self) -> int:
-        return self.na_origem - self.na_bronze
+        return self.na_origem - self.no_destino
 
     @property
     def bate(self) -> bool:
@@ -71,16 +73,16 @@ class Reconciliacao:
     def como_resultado(self) -> Resultado:
         """Converte a contagem em uma linha da bateria, com historico.
 
-        `abs()` porque o desvio conta nos dois sentidos: bronze com menos
-        linhas indica perda no caminho; com mais, arquivo removido da landing
-        zone ou insercao feita por fora do pipeline.
+        `abs()` porque o desvio conta nos dois sentidos: destino com menos
+        linhas indica perda no caminho; com mais, origem removida ou insercao
+        feita por fora do pipeline.
         """
         return Resultado(
-            nome=RECONCILIACAO,
+            nome=self.nome,
             severidade=BLOQUEIA,
             violacoes=abs(self.diferenca),
             esperado=self.na_origem,
-            obtido=self.na_bronze,
+            obtido=self.no_destino,
         )
 
 
@@ -203,6 +205,149 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
     )
 
 
+def verificacoes_silver(endpoint: Endpoint) -> tuple[Verificacao, ...]:
+    """A bateria da silver. Aqui cabem regras sobre o significado do dado.
+
+    Sao verificacoes que a bronze nao poderia fazer: comparar duas datas
+    exige que elas sejam datas, e nao texto.
+    """
+    tabela = silver.TABELA_COMMITS
+    quarentena = silver.TABELA_REJEITADOS
+
+    return (
+        Verificacao(
+            nome="chave_duplicada",
+            descricao=(
+                "Uma linha por (repo, sha). Verifica de fora o upsert que a "
+                "carga faz por essa mesma chave."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT repo, sha FROM {tabela}
+                    GROUP BY repo, sha HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="contagem_de_pais_negativa",
+            descricao=(
+                "`size(NULL)` devolve -1 em modo legado. Contagem negativa "
+                "passaria por qualquer verificacao de nulo sem ser notada."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"SELECT count(*) AS violacoes FROM {tabela} WHERE qtd_pais < 0",
+        ),
+        Verificacao(
+            nome="normalizacao_nao_aplicada",
+            descricao=(
+                "E-mail gravado exatamente como a normalizacao produziria. "
+                "Violacao indica linha que entrou por fora da projecao."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE autor_email <> lower(trim(autor_email))
+                   OR committer_email <> lower(trim(committer_email))
+            """,
+        ),
+        Verificacao(
+            nome="texto_vazio_em_vez_de_nulo",
+            descricao=(
+                "String vazia e NULL sao a mesma ausencia e comparam "
+                "diferente. A silver converte uma na outra."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE mensagem = '' OR autor_nome = '' OR github_login = ''
+            """,
+        ),
+        Verificacao(
+            nome="quarentena_sem_motivo",
+            descricao=(
+                "Toda linha desviada diz por que foi. Quarentena sem motivo "
+                "e um registro perdido com passos extras."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {quarentena}
+                WHERE motivo IS NULL OR motivo NOT IN ({_lista_sql(silver.MOTIVOS_DE_REJEICAO)})
+            """,
+        ),
+        Verificacao(
+            nome="commit_anterior_a_autoria",
+            descricao=(
+                "A data de entrada no repositorio nao antecede a de escrita. "
+                "Rebase afasta as duas, mas nunca inverte a ordem."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE commitado_em < autorado_em
+            """,
+        ),
+        Verificacao(
+            nome="data_no_futuro",
+            descricao=(
+                "Commit datado depois de agora. Costuma ser relogio errado na "
+                "maquina de quem commitou, e distorce qualquer serie temporal."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE commitado_em > current_timestamp()
+            """,
+        ),
+        Verificacao(
+            nome="tipo_de_autor_fora_do_dominio",
+            descricao=(
+                "`github_tipo` pertence ao dominio conhecido. Valor novo "
+                "indica categoria criada pela origem, nao defeito nosso."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE github_tipo IS NOT NULL
+                  AND github_tipo NOT IN ({_lista_sql(silver.TIPOS_DE_AUTOR)})
+            """,
+        ),
+        Verificacao(
+            nome="motivo_de_assinatura_fora_do_dominio",
+            descricao=(
+                "`assinatura_motivo` pertence ao dominio conhecido, que o "
+                "GitHub amplia de tempos em tempos."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE assinatura_motivo IS NOT NULL
+                  AND assinatura_motivo NOT IN ({_lista_sql(silver.MOTIVOS_DE_ASSINATURA)})
+            """,
+        ),
+        Verificacao(
+            nome="repo_fora_do_escopo",
+            descricao=(
+                "Todo repo pertence a lista do config, como na bronze. "
+                "Divergencia aqui apareceria entre as duas camadas."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {tabela}
+                WHERE repo NOT IN ({_lista_sql(REPOS)})
+            """,
+        ),
+    )
+
+
 def resumo(resultados: list[Resultado]) -> tuple[int, int]:
     """(quantos bloqueios falharam, quantos avisos falharam)."""
     bloqueios = sum(1 for r in resultados if not r.passou and r.severidade == BLOQUEIA)
@@ -301,6 +446,43 @@ def reconciliar(
         bronze.ler_landing(spark, base_volume, endpoint, momento), endpoint
     )
     return Reconciliacao(
+        nome=RECONCILIACAO_BRONZE,
         na_origem=fonte.count(),
-        na_bronze=spark.table(bronze.nome_tabela(endpoint)).count(),
+        no_destino=spark.table(bronze.nome_tabela(endpoint)).count(),
     )
+
+
+def reconciliar_silver(spark, endpoint: Endpoint) -> Reconciliacao:
+    """Contagem de controle: `bronze = silver + quarentena`.
+
+    A igualdade so fecha porque registro fora do contrato e desviado, nunca
+    descartado. Se a silver descartasse em silencio, a diferenca apareceria
+    aqui sem nenhuma pista de onde as linhas foram parar.
+    """
+    na_bronze = spark.table(bronze.nome_tabela(endpoint)).count()
+    na_silver = spark.table(silver.TABELA_COMMITS).count()
+    em_quarentena = spark.table(silver.TABELA_REJEITADOS).count()
+
+    return Reconciliacao(
+        nome=RECONCILIACAO_SILVER,
+        na_origem=na_bronze,
+        no_destino=na_silver + em_quarentena,
+    )
+
+
+def avaliar(
+    spark,
+    tabela: str,
+    verificacoes: tuple[Verificacao, ...],
+    reconciliacao: Reconciliacao,
+    momento: datetime,
+) -> list[Resultado]:
+    """Roda a bateria, grava o historico e devolve os resultados.
+
+    A gravacao acontece aqui, antes de qualquer interrupcao: quem chama e
+    quem decide levantar. Execucao reprovada que nao entra no historico e
+    justamente a que faria falta na investigacao.
+    """
+    resultados = [reconciliacao.como_resultado()] + executar(spark, verificacoes)
+    registrar(spark, resultados, tabela, momento)
+    return resultados

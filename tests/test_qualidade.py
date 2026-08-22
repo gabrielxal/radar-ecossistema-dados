@@ -95,27 +95,27 @@ def test_bloqueio_que_falha_interrompe_com_o_detalhe():
 # --------------------------------------------------------------------------
 
 def test_reconciliacao_bate_quando_as_contagens_sao_iguais():
-    r = qualidade.Reconciliacao(na_origem=200, na_bronze=200)
+    r = qualidade.Reconciliacao(qualidade.RECONCILIACAO_BRONZE, na_origem=200, no_destino=200)
     assert r.bate
     assert r.diferenca == 0
 
 
 def test_reconciliacao_acusa_linha_perdida_no_caminho():
-    r = qualidade.Reconciliacao(na_origem=200, na_bronze=198)
+    r = qualidade.Reconciliacao(qualidade.RECONCILIACAO_BRONZE, na_origem=200, no_destino=198)
     assert not r.bate
     assert r.diferenca == 2
 
 
 def test_reconciliacao_vira_regra_bloqueante_da_bateria():
-    r = qualidade.Reconciliacao(na_origem=200, na_bronze=198).como_resultado()
-    assert r.nome == qualidade.RECONCILIACAO
+    r = qualidade.Reconciliacao(qualidade.RECONCILIACAO_BRONZE, na_origem=200, no_destino=198).como_resultado()
+    assert r.nome == qualidade.RECONCILIACAO_BRONZE
     assert r.severidade == qualidade.BLOQUEIA
     assert not r.passou
 
 
 def test_reconciliacao_guarda_as_duas_contagens():
     # E o que responde "quanto a landing zone tinha naquele dia".
-    r = qualidade.Reconciliacao(na_origem=200, na_bronze=200).como_resultado()
+    r = qualidade.Reconciliacao(qualidade.RECONCILIACAO_BRONZE, na_origem=200, no_destino=200).como_resultado()
     assert (r.esperado, r.obtido) == (200, 200)
     assert r.passou
 
@@ -123,14 +123,14 @@ def test_reconciliacao_guarda_as_duas_contagens():
 def test_reconciliacao_conta_violacao_nos_dois_sentidos():
     # Bronze com linha a MAIS tambem e defeito: arquivo sumiu da landing zone
     # ou alguem inseriu por fora do pipeline.
-    sobra = qualidade.Reconciliacao(na_origem=198, na_bronze=200).como_resultado()
+    sobra = qualidade.Reconciliacao(qualidade.RECONCILIACAO_BRONZE, na_origem=198, no_destino=200).como_resultado()
     assert sobra.violacoes == 2
     assert not sobra.passou
 
 
 def test_reconciliacao_reprovada_interrompe_a_execucao():
-    recon = qualidade.Reconciliacao(na_origem=200, na_bronze=198).como_resultado()
-    with pytest.raises(AssertionError, match=qualidade.RECONCILIACAO):
+    recon = qualidade.Reconciliacao(qualidade.RECONCILIACAO_BRONZE, na_origem=200, no_destino=198).como_resultado()
+    with pytest.raises(AssertionError, match=qualidade.RECONCILIACAO_BRONZE):
         qualidade.levantar_se_bloqueou([recon])
 
 
@@ -138,3 +138,75 @@ def test_regra_comum_nao_preenche_as_contagens():
     # `esperado` seria sempre 0 nas regras de violacao e nao diria nada.
     r = resultado("chave_duplicada", qualidade.BLOQUEIA, 0)
     assert r.esperado is None and r.obtido is None
+
+
+# --------------------------------------------------------------------------
+# Bateria da silver
+# --------------------------------------------------------------------------
+
+from radar import silver  # noqa: E402
+
+SILVER = qualidade.verificacoes_silver(COMMITS)
+
+
+def test_bateria_da_silver_tem_a_mesma_forma_da_bronze():
+    nomes = [v.nome for v in SILVER]
+    assert len(nomes) == len(set(nomes))
+    for v in SILVER:
+        assert v.severidade in qualidade.SEVERIDADES
+        assert "AS violacoes" in v.sql
+        assert len(v.descricao) > 30
+
+
+def test_bateria_da_silver_consulta_as_tabelas_da_camada():
+    tabelas = {silver.TABELA_COMMITS, silver.TABELA_REJEITADOS}
+    for v in SILVER:
+        assert any(t in v.sql for t in tabelas)
+
+
+def test_silver_verifica_o_que_a_bronze_nao_poderia():
+    # Comparar duas datas exige que elas sejam datas, e nao texto: e a prova
+    # de que a camada mudou de responsabilidade, nao so de formato.
+    ordem = next(v for v in SILVER if v.nome == "commit_anterior_a_autoria")
+    assert "commitado_em < autorado_em" in ordem.sql
+
+
+def test_silver_guarda_a_licao_do_size_null():
+    # `size(NULL)` devolve -1; contagem negativa passaria por qualquer
+    # verificacao de nulo sem ser notada.
+    negativa = next(v for v in SILVER if v.nome == "contagem_de_pais_negativa")
+    assert negativa.severidade == qualidade.BLOQUEIA
+    assert "qtd_pais < 0" in negativa.sql
+
+
+def test_silver_confere_a_propria_normalizacao():
+    regra = next(v for v in SILVER if v.nome == "normalizacao_nao_aplicada")
+    assert "lower(trim(autor_email))" in regra.sql
+
+
+def test_dominios_entram_nas_verificacoes_de_categoria():
+    tipo = next(v for v in SILVER if v.nome == "tipo_de_autor_fora_do_dominio")
+    for valor in silver.TIPOS_DE_AUTOR:
+        assert f"'{valor}'" in tipo.sql
+
+    motivo = next(v for v in SILVER if v.nome == "motivo_de_assinatura_fora_do_dominio")
+    for valor in silver.MOTIVOS_DE_ASSINATURA:
+        assert f"'{valor}'" in motivo.sql
+
+
+def test_quarentena_e_verificada_junto():
+    regra = next(v for v in SILVER if v.nome == "quarentena_sem_motivo")
+    assert silver.TABELA_REJEITADOS in regra.sql
+    for motivo in silver.MOTIVOS_DE_REJEICAO:
+        assert f"'{motivo}'" in regra.sql
+
+
+def test_dominio_fora_da_lista_avisa_em_vez_de_bloquear():
+    # Categoria nova e mudanca da origem, nao defeito do pipeline.
+    for nome in ("tipo_de_autor_fora_do_dominio", "motivo_de_assinatura_fora_do_dominio"):
+        assert next(v for v in SILVER if v.nome == nome).severidade == qualidade.AVISA
+
+
+def test_as_duas_reconciliacoes_tem_nomes_distintos():
+    # Dividem a tabela de historico; nome igual misturaria as series.
+    assert qualidade.RECONCILIACAO_BRONZE != qualidade.RECONCILIACAO_SILVER

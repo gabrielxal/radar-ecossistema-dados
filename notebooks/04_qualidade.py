@@ -74,7 +74,7 @@ print("pre-voo ok")
 recon = qualidade.reconciliar(spark, CAMINHO_VOLUME, ENDPOINT, agora)
 
 print(f"na landing zone (deduplicada) : {recon.na_origem}")
-print(f"na bronze                     : {recon.na_bronze}")
+print(f"na bronze                     : {recon.no_destino}")
 print(f"diferenca                     : {recon.diferenca}")
 
 # Sem `assert` aqui de proposito: a reconciliacao entra na bateria como as
@@ -97,9 +97,9 @@ for v in bateria:
 
 # COMMAND ----------
 
-# A contagem de controle na frente: e a unica que pega perda silenciosa,
-# e agora carrega historico igual as demais.
-resultados = [recon.como_resultado()] + qualidade.executar(spark, bateria)
+# `avaliar` poe a contagem de controle na frente da bateria e grava o
+# historico antes de devolver; a interrupcao fica para a celula seguinte.
+resultados = qualidade.avaliar(spark, TABELA, bateria, recon, agora)
 
 for r in resultados:
     marca = "ok  " if r.passou else "FALHA"
@@ -115,15 +115,14 @@ print(f"bloqueios: {bloqueios} | avisos: {avisos}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Registrar antes de falhar
+# MAGIC ## 3. Cobrar o resultado
 # MAGIC
-# MAGIC A gravacao vem **antes** do `levantar_se_bloqueou`. Se a excecao viesse
-# MAGIC primeiro, a execucao reprovada nao entraria no historico -- e o
-# MAGIC historico serve justamente para investigar o que reprovou.
+# MAGIC O historico ja foi gravado por `avaliar`, na celula anterior. A ordem e
+# MAGIC deliberada: se a excecao viesse primeiro, a execucao reprovada nao
+# MAGIC entraria no historico -- e e ela que faria falta na investigacao.
 
 # COMMAND ----------
 
-qualidade.registrar(spark, resultados, TABELA, agora)
 print("execucao registrada em", qualidade.TABELA_QUALIDADE)
 
 qualidade.levantar_se_bloqueou(resultados)
@@ -224,7 +223,7 @@ display(
                esperado - obtido AS diferenca
         FROM {qualidade.TABELA_QUALIDADE}
         WHERE tabela = '{TABELA}'
-          AND verificacao = '{qualidade.RECONCILIACAO}'
+          AND verificacao = '{qualidade.RECONCILIACAO_BRONZE}'
         ORDER BY executado_em DESC
         LIMIT 30
         """

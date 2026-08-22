@@ -368,7 +368,9 @@ Para cada repositório:
 
 ### 5.6 A tabela de controle
 
-Onde a memória do pipeline mora (a ser criada na Etapa 2):
+Onde a memória do pipeline mora. Criada na Etapa 2 como
+`workspace.radar_bronze.controle_ingestao`, com grão de uma linha por par
+`(repo, endpoint)`:
 
 | Coluna | Conteúdo |
 |---|---|
@@ -378,6 +380,8 @@ Onde a memória do pipeline mora (a ser criada na Etapa 2):
 | `etag` | ETag da sentinela |
 | `ultima_execucao` | quando rodou |
 | `status` | `ok` / `erro` |
+| `mensagem` | detalhe do erro, quando houver |
+| `registros` | quantos registros a última carga trouxe |
 
 É ela que transforma um script que roda uma vez num processo que roda todo dia sem refazer
 trabalho.
@@ -635,6 +639,12 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | 5 | `pip install -e .` instalando no Python **global**, com o venv aparentemente ativo | O `.venv` foi criado **sem `pip.exe`**; o PATH caiu no pip do sistema | **Sempre `python -m pip`, nunca `pip`.** `pip` é um executável resolvido pelo PATH e pode apontar para outro interpretador; `python -m pip` usa o pip do Python que está rodando. Verifique com `python -c "import sys; print(sys.executable)"` |
 | 6 | Medição de consumo de quota resultando em `-1` | O endpoint `/rate_limit` serve valor **em cache** (reportava 5000 enquanto as respostas reais diziam 4991) e **não** consome quota | **Meça pelo header da resposta que interessa** (`X-RateLimit-Remaining`), não por um endpoint de status separado. Valida a decisão de expor `rate_remaining` em toda `Resposta` |
 | 7 | `SyntaxError` apontando para `def paginar(` | O `)` que fechava o `return Resposta(` foi sobrescrito ao colar | `SyntaxError` quase sempre aponta a linha **seguinte** ao erro real — o interpretador só percebe o problema ao encontrar um token inesperado. **Olhe sempre a linha anterior**: costuma ser parêntese, colchete ou aspas sem fechar |
+| 8 | `TABLE_OR_VIEW_NOT_FOUND` no meio do laço de ingestão | O `00_setup_catalogo` tinha sido dividido em dois notebooks e só o de credenciais chegou a rodar — a tabela de controle nunca foi criada | **Dependência ausente deve falhar cedo e nomeada.** Uma verificação de pré-voo antes da primeira requisição troca um erro do motor no meio do processamento por uma mensagem que identifica o que falta, e evita gastar quota antes de descobrir. Corolário achado no mesmo diagnóstico: a leitura do checkpoint estava **fora** do `try/except`, então o erro atravessou a proteção que existia justamente para isolar falha por repositório |
+| 9 | `CONFIG_NOT_AVAILABLE` ao definir `spark.sql.sources.partitionColumnTypeInference.enabled` | O Serverless aceita alterar apenas uma lista fechada de configurações do Spark | **Em ambiente gerenciado, expresse a intenção no código, não na sessão.** O mesmo efeito veio de um `cast("string")` na projeção: explícito, versionado e imune a restrição de plataforma. Configuração de sessão é global, invisível para quem lê o código depois, e pode simplesmente não existir no ambiente |
+| 10 | Correção em `src/` sem efeito algum depois do `git pull` | Módulo já importado permanece em `sys.modules` pelo resto da vida do interpretador | **Notebook e módulo importado têm ciclos de vida diferentes.** A célula reexecuta e reflete a mudança; o módulo fica congelado até `dbutils.library.restartPython()`. É o preço da decisão 8.1 — lógica em `src/` — e vale pagá-lo |
+| 11 | `SyntaxError: invalid syntax` na primeira célula de um notebook | `%load_ext autoreload` é magic do **IPython**, não do Databricks; o que a plataforma não reconhece como magic vai direto para o parser do Python | **Prática de Jupyter não é automaticamente portátil para o Databricks.** A plataforma tem as ferramentas dela — `restartPython()` no lugar do `autoreload` |
+| 12 | `UnsatisfiedLinkError: NativeIO$Windows.access0` ao ler arquivo local pelo Spark | Leitura de arquivo no Windows passa pela camada nativa do Hadoop, que exige `winutils.exe` e `hadoop.dll` | **Limitação de ambiente também é sinal de projeto.** Antes de instalar o binário de terceiros, a saída foi separar I/O de transformação (`ler_landing` / `projetar`) — desenho melhor de qualquer forma, e que tornou a regra de negócio testável sem tocar o disco |
+| 13 | Teste escrito com a resposta "óbvia" falhou: `from_json` sobre JSON inválido | Em modo permissivo ele não devolve `NULL` na coluna, e sim um struct com **todos os campos** nulos | **A detecção de registro inválido não pode ser `coluna IS NULL`.** O desenho da quarentena da Etapa 3 mudou por causa disso — antes de existir. Sem sessão Spark local, o erro só apareceria com o pipeline já rodando |
 
 ---
 
@@ -646,8 +656,8 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 |---|---|---|---|
 | **0** | Ambiente, estrutura do repositório, gestão de segredo | Git, isolamento de ambiente, segurança | ✅ concluída |
 | **1** | `GitHubClient` — cliente da API | Paginação, retry/backoff, rate limit, ETag, testes com dublê | ✅ concluída |
-| **2** | Tabela de controle + landing zone + camada bronze | Checkpoint, JSON cru particionado, idempotência, proveniência | ⏳ próxima |
-| **3** | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ☐ |
+| **2** | Tabela de controle + landing zone + camada bronze | Checkpoint, JSON cru particionado, idempotência, proveniência | ✅ concluída |
+| **3** | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ⏳ em andamento |
 | **4** | Gold — dimensões | Star schema, SCD2, chaves substitutas | ☐ |
 | **5** | Gold — os três fatos | Transação, snapshot periódico, snapshot acumulado | ☐ |
 | **6** | CI, orquestração, README | GitHub Actions, Databricks Workflows, documentação | ☐ |
@@ -663,7 +673,25 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | 1.5 | Retry com backoff exponencial e jitter, respeitando `Retry-After` |
 | 1.6 | 16 testes automatizados com sessão dublê — 0,13s, sem rede |
 
-### 10.3 Fluxo de trabalho
+### 10.3 Detalhe da Etapa 2 (concluída)
+
+| Sub-passo | Entrega |
+|---|---|
+| 2.1 | Setup do catálogo — schemas, Volume da landing zone, tabela de controle |
+| 2.2 | `controle.py` — checkpoint por `(repo, endpoint)`, gravado por `MERGE` |
+| 2.3 | `ingestao.py` — sentinela por ETag, coleta e gravação JSONL particionada |
+| 2.4 | Notebook de ingestão — janela de histórico na 1ª carga, falha isolada por repositório |
+| 2.5 | `bronze.py` — JSONL cru → Delta, `MERGE` idempotente por chave natural |
+| 2.6 | `qualidade.py` — bateria de verificações e contagem de controle, com histórico |
+
+**Idempotência, medida no transaction log.** Sete versões da tabela bronze, em três
+sessões e quatro clusters diferentes: a primeira inseriu 200 linhas, as seis seguintes
+inseriram zero — todas lendo as mesmas 200 linhas de origem. Nessas seis,
+`numTargetFilesAdded` e `numTargetBytesAdded` ficaram em `0`: o `MERGE` sem
+correspondência não reescreve arquivo. E `matchedPredicates` vazio em todas registra,
+no próprio log, que esta tabela não tem caminho de `UPDATE`.
+
+### 10.4 Fluxo de trabalho
 
 ```powershell
 # 1. ativar o ambiente
@@ -671,19 +699,43 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 
 # 2. trabalhar em src/ e tests/
 
-# 3. rodar os testes ANTES de commitar
+# 3. laco rapido: so os testes que nao sobem JVM
+pytest -m "not spark"
+
+# 4. antes de commitar: a suite inteira
 pytest
 
-# 4. commit descritivo
+# 5. commit descritivo
 git add .
 git status          # SEMPRE revise antes de commitar
 git commit -m "feat: descricao do que mudou"
 git push
 
-# 5. no Databricks: botao Pull no Git folder, e rodar o notebook
+# 6. no Databricks: botao Pull no Git folder, e rodar o notebook
 ```
 
-### 10.4 Convenção de mensagens de commit
+#### Sessão Spark local
+
+`pyspark` é dependência de **desenvolvimento** (`pip install -e ".[dev]"`), não de
+execução: no Databricks o motor vem do cluster, e instalá-lo lá conflitaria com o runtime.
+
+A sessão local cobre schema, `from_json`, casts, decodificação de partição e
+deduplicação. **Não** cobre Delta, Volume nem Unity Catalog — `MERGE`, `saveAsTable` e
+`DESCRIBE HISTORY` seguem validados apenas no Databricks.
+
+| Variável | Para quê |
+|---|---|
+| `PYSPARK_PYTHON` | resolvida sozinha no `conftest.py`, a partir do interpretador que roda os testes; sem ela o worker falha com `Accept timed out` |
+| `HADOOP_HOME` | no Windows, aponta para o diretório com `winutils.exe` e `hadoop.dll`; sem ela, os testes que leem arquivo são **pulados**, não quebrados |
+
+`HADOOP_HOME` mora no `.env`, que não é versionado — o repositório continua clonável em
+qualquer máquina.
+
+> **Limite a ter em mente:** o runtime do Databricks é mais novo que o `pyspark` do venv.
+> Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
+> do motor.
+
+### 10.5 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -696,7 +748,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.5 Regras de manutenção deste documento
+### 10.6 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8 — registre
@@ -705,7 +757,7 @@ Conventional Commits:
 4. Se uma decisão for revertida, **não apague** — registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.6 Melhorias planejadas
+### 10.7 Melhorias planejadas
 
 Viram commits de evolução, e essa evolução fica visível no histórico:
 
