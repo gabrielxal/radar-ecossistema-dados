@@ -1,8 +1,8 @@
 """Camada bronze: o JSONL cru da landing zone vira tabela Delta.
 
-Bronze nao interpreta o dado. O payload entra como STRING, exatamente a
-linha que a API devolveu. So a chave natural e projetada para fora, porque
-sem chave nao existe MERGE -- e sem MERGE a carga nao e idempotente.
+Bronze nao interpreta o dado: o payload entra como STRING, identico a linha
+que a API devolveu. A chave natural e a unica projetada para fora, porque o
+MERGE que garante a idempotencia da carga precisa dela.
 
 O objeto `spark` e recebido como parametro e os imports de pyspark ficam
 dentro das funcoes, para o modulo continuar importavel fora do Databricks.
@@ -17,10 +17,10 @@ from datetime import datetime
 from radar.config import BRONZE, fqn
 from radar.ingestao import Endpoint
 
-# Ancorado no inicio e sem `_` na primeira parte: nome de usuario e de
-# organizacao no GitHub aceitam apenas letras, numeros e hifen, entao o
-# primeiro `__` do diretorio e sempre o separador owner/nome. E o que faz
-# `great-expectations__great_expectations` sobreviver intacto.
+# Ancorado, e sem `_` na primeira parte: nome de usuario e de organizacao no
+# GitHub aceitam apenas letras, numeros e hifen, entao o primeiro `__` do
+# diretorio e sempre o separador owner/nome. Preserva o underscore do nome
+# do repositorio, como em `great-expectations__great_expectations`.
 REGEX_REPO = r"^([^_]+)__"
 SUBST_REPO_SQL = r"$1/"
 
@@ -52,8 +52,8 @@ def caminho_endpoint(base_volume: str, endpoint: Endpoint) -> str:
 def dessanitizar_repo(diretorio: str) -> str:
     """`owner__nome` -> `owner/nome`. Inverso de ingestao.sanitizar_repo.
 
-    Decodificar o que nos mesmos codificamos no caminho nao viola a regra de
-    bronze: o valor restaurado e o que a origem conhece.
+    Nao viola a regra da camada: o valor restaurado e o que a origem usa; a
+    codificacao com `__` foi nossa, imposta pelo nome de diretorio.
     """
     return re.sub(REGEX_REPO, r"\1/", diretorio, count=1)
 
@@ -61,9 +61,9 @@ def dessanitizar_repo(diretorio: str) -> str:
 def ddl(endpoint: Endpoint) -> str:
     """DDL da tabela bronze do endpoint. Todo campo de dado e STRING.
 
-    Sem PARTITIONED BY: sao 14 repositorios e poucos MB. Particionar criaria
-    diretorios com arquivos minusculos -- o small file problem, que custa
-    mais leitura do que o filtro economiza. Se um dia crescer, o caminho e
+    Sem PARTITIONED BY: o volume atual e de poucos MB, e particionar por
+    repositorio geraria arquivos pequenos demais, cujo custo de leitura
+    supera o que o filtro economiza. Em escala maior a alternativa e
     CLUSTER BY, nao particao fisica.
     """
     return f"""
@@ -93,9 +93,9 @@ def criar_tabela(spark, endpoint: Endpoint) -> None:
 def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
     """Le o JSONL cru e devolve o DataFrame no formato da tabela bronze.
 
-    `.text()` e nao `.json()`: o Spark nao interpreta nada, cada linha chega
-    como string. Schema da origem mudou? A bronze nao percebe e nao quebra --
-    o contrato de tipos e assunto da silver.
+    `.text()` e nao `.json()`: o Spark nao infere schema nem tipo, cada linha
+    chega como string. Mudanca de formato na origem nao quebra esta camada;
+    o contrato de tipos pertence a silver.
     """
     from pyspark.sql import functions as F
 
@@ -107,19 +107,18 @@ def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
 
     return bruto.select(
         F.get_json_object(F.col("value"), f"$.{endpoint.chave}").alias(endpoint.chave),
-        # `.cast("string")` nas duas colunas de particao: o Spark infere o
-        # tipo do valor no caminho e transformaria `dt=2026-08-21` em DATE.
-        # Na bronze, particao tambem e STRING. O cast resolve na projecao --
-        # desligar a inferencia exigiria uma spark.conf que o Serverless nao
-        # deixa alterar.
+        # O Spark infere o tipo do valor lido do caminho: `dt=2026-08-21`
+        # viraria DATE. Na bronze, particao tambem e STRING. O cast resolve
+        # na projecao; desligar a inferencia exigiria uma spark.conf que o
+        # Serverless nao permite alterar.
         F.regexp_replace(
             F.col("repo").cast("string"), REGEX_REPO, SUBST_REPO_SQL
         ).alias("repo"),
         F.col("dt").cast("string").alias("dt"),
         F.col("value").alias("payload"),
         F.lit(momento).cast("timestamp").alias("_ingerido_em"),
-        # Coluna oculta que todo file source expoe. A proveniencia vem de
-        # graca: nao precisamos escrever o caminho dentro do arquivo.
+        # Coluna oculta exposta por todo file source do Spark. Evita gravar
+        # o caminho de origem dentro do proprio payload.
         F.col("_metadata.file_path").alias("_arquivo_origem"),
         F.lit(endpoint.nome).alias("_endpoint"),
     )
@@ -128,9 +127,9 @@ def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
 def deduplicar(df, endpoint: Endpoint):
     """Uma linha por (repo, chave), mantendo a ocorrencia mais antiga.
 
-    Duplicata aqui nao e acidente: DIAS_SOBREPOSICAO faz cada carga reler um
-    dia ja lido, de proposito. E o MERGE recusa fonte com chave repetida
-    ("multiple source rows matched"), entao a deduplicacao vem antes dele.
+    A duplicata e esperada: DIAS_SOBREPOSICAO faz cada carga reler um dia ja
+    lido. Como o MERGE recusa fonte com chave repetida ("multiple source
+    rows matched"), a deduplicacao precede a gravacao.
     """
     from pyspark.sql import Window
     from pyspark.sql import functions as F

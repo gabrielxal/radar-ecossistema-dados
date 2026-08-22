@@ -23,10 +23,6 @@ REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
 
-# Modulo ja importado fica em cache na sessao. Se uma mudanca em `src/` vinda
-# do `git pull` nao surtir efeito, rode `dbutils.library.restartPython()` numa
-# celula e execute o notebook do topo.
-
 from radar import bronze, controle, ingestao, qualidade
 from radar.config import BRONZE, CATALOG, VOLUME
 
@@ -54,7 +50,7 @@ print("historico         :", qualidade.TABELA_QUALIDADE)
 
 if not spark.catalog.tableExists(TABELA):
     raise RuntimeError(
-        f"tabela {TABELA} nao existe. Rode notebooks/03_bronze.py antes."
+        f"tabela {TABELA} nao existe (criada por notebooks/03_bronze.py)"
     )
 
 qualidade.criar_tabela(spark)

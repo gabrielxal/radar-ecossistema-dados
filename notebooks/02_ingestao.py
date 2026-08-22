@@ -25,10 +25,6 @@ REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
 
-# Modulo ja importado fica em cache na sessao. Se uma mudanca em `src/` vinda
-# do `git pull` nao surtir efeito, rode `dbutils.library.restartPython()` numa
-# celula e execute o notebook do topo.
-
 from radar import controle, ingestao
 from radar.config import BRONZE, CATALOG, REPOS, VOLUME
 from radar.github_client import GitHubClient
@@ -71,27 +67,32 @@ print("execucao:", agora.isoformat())
 # MAGIC ## Pre-voo
 # MAGIC
 # MAGIC A tabela de controle e o Volume sao criados pelo `00_setup_catalogo`.
-# MAGIC Conferir aqui, antes de gastar quota, troca um
-# MAGIC `TABLE_OR_VIEW_NOT_FOUND` no meio do laco por uma mensagem que diz o
-# MAGIC que fazer.
+# MAGIC A conferencia vem antes da primeira requisicao: dependencia ausente
+# MAGIC falha aqui, nomeada, em vez de virar um `TABLE_OR_VIEW_NOT_FOUND`
+# MAGIC no meio do laco, com quota ja consumida.
 
 # COMMAND ----------
 
-FALTA_SETUP = "Rode notebooks/00_setup_catalogo.py antes desta ingestao."
+CRIADO_POR = "criado por notebooks/00_setup_catalogo.py"
 
 if not spark.catalog.tableExists(controle.TABELA_CONTROLE):
-    raise RuntimeError(f"tabela {controle.TABELA_CONTROLE} nao existe. {FALTA_SETUP}")
+    raise RuntimeError(
+        f"tabela {controle.TABELA_CONTROLE} nao existe ({CRIADO_POR})"
+    )
 
 try:
     dbutils.fs.ls(CAMINHO_VOLUME)
 except Exception as erro:
-    raise RuntimeError(f"volume {CAMINHO_VOLUME} nao existe. {FALTA_SETUP}") from erro
+    raise RuntimeError(
+        f"volume {CAMINHO_VOLUME} nao existe ({CRIADO_POR})"
+    ) from erro
 
 print("pre-voo ok:", controle.TABELA_CONTROLE, "|", CAMINHO_VOLUME)
 
 # COMMAND ----------
 
-# Sonda com chamada real: /rate_limit devolve valor em cache.
+# Chamada a um endpoint de dados, e nao a /rate_limit: aquele nao consome
+# quota e pode responder de cache, o que falsearia a medicao.
 def sonda() -> int:
     return cliente.get(f"/repos/{REPOS_ALVO[0]}").rate_remaining
 
@@ -104,8 +105,9 @@ print("quota antes:", quota_inicial)
 # MAGIC %md
 # MAGIC ## Execucao
 # MAGIC
-# MAGIC O `try/except` por repositorio e proposital: falha em um nao pode
-# MAGIC derrubar os outros treze. O erro vai para a tabela de controle.
+# MAGIC O `try/except` por repositorio isola a falha: um repositorio que
+# MAGIC quebra nao interrompe os demais, e o erro fica registrado na
+# MAGIC tabela de controle com `status='erro'`.
 
 # COMMAND ----------
 
@@ -173,6 +175,7 @@ print(f"repositorios      : {len(resultados)}")
 print(f"  pulados (304)   : {pulados}")
 print(f"  com erro        : {com_erro}")
 print(f"registros gravados: {total:,}")
+# O -1 desconta a sonda final, que tambem consome uma requisicao.
 print(f"quota consumida   : {quota_inicial - quota_final - 1}")
 print(f"quota restante    : {quota_final}")
 

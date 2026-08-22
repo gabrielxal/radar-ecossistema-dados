@@ -1,11 +1,10 @@
 """Testes de qualidade sobre as tabelas do lakehouse.
 
-Cada verificacao e uma consulta que conta VIOLACOES: zero e aprovacao. O
-resultado de cada execucao fica gravado, porque qualidade sem historico nao
-responde a pergunta que importa -- "isso ja estava errado ontem?".
+Cada verificacao e uma consulta que conta violacoes: zero e aprovacao. O
+resultado de cada execucao fica gravado, o que permite comparar o estado de
+hoje com o das execucoes anteriores.
 
-Severidade separa o que para o pipeline do que apenas informa. Tratar tudo
-como fatal treina o time a ignorar o alarme.
+A severidade separa a falha que interrompe o pipeline da que apenas informa.
 """
 
 from __future__ import annotations
@@ -23,8 +22,8 @@ BLOQUEIA = "bloqueia"
 AVISA = "avisa"
 SEVERIDADES = (BLOQUEIA, AVISA)
 
-# A contagem de controle nao e um SQL sobre uma tabela so, mas entra na
-# bateria com o mesmo formato das demais -- e o que lhe da historico.
+# A contagem de controle nao e um SQL sobre uma tabela unica, mas entra na
+# bateria com o mesmo formato das demais para compartilhar o historico.
 RECONCILIACAO = "reconciliacao_landing_bronze"
 
 
@@ -44,8 +43,8 @@ class Resultado:
     severidade: str
     violacoes: int
     # Preenchidos so pela contagem de controle, onde o par origem/destino e a
-    # informacao que interessa guardar. Nulos nas regras que apenas contam
-    # violacoes -- ali `esperado` seria sempre 0 e nao diria nada.
+    # informacao a guardar. Nulos nas demais regras, em que `esperado` seria
+    # sempre 0.
     esperado: int | None = None
     obtido: int | None = None
 
@@ -70,11 +69,11 @@ class Reconciliacao:
         return self.diferenca == 0
 
     def como_resultado(self) -> Resultado:
-        """Vira uma linha da bateria, com historico como as demais regras.
+        """Converte a contagem em uma linha da bateria, com historico.
 
-        `abs()` porque desvio nos dois sentidos e violacao: bronze com menos
-        linhas e perda no caminho; com mais, e arquivo sumido da landing zone
-        ou insercao por fora do pipeline. As duas coisas sao graves.
+        `abs()` porque o desvio conta nos dois sentidos: bronze com menos
+        linhas indica perda no caminho; com mais, arquivo removido da landing
+        zone ou insercao feita por fora do pipeline.
         """
         return Resultado(
             nome=RECONCILIACAO,
@@ -123,8 +122,8 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
         Verificacao(
             nome="chave_ausente_no_payload",
             descricao=(
-                f"Todo payload tem `{chave}` la dentro. Falha aqui significa "
-                "JSON invalido ou mudanca no formato da API."
+                f"Todo payload contem `{chave}`. Violacao indica JSON "
+                "invalido ou mudanca no formato da API."
             ),
             severidade=BLOQUEIA,
             sql=f"""
@@ -136,8 +135,8 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
         Verificacao(
             nome="chave_duplicada",
             descricao=(
-                "Uma linha por (repo, chave). E a idempotencia do MERGE "
-                "verificada de fora, e nao apenas confiada."
+                "Uma linha por (repo, chave). Verifica de fora a "
+                "idempotencia garantida pelo MERGE da carga."
             ),
             severidade=BLOQUEIA,
             sql=f"""
@@ -152,8 +151,8 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
         Verificacao(
             nome="proveniencia_incompleta",
             descricao=(
-                "Sem os tres metadados nao ha como responder de onde a linha "
-                "veio -- a primeira pergunta de toda investigacao."
+                "Os tres metadados de proveniencia estao preenchidos. Sem "
+                "eles nao ha como rastrear a origem de uma linha."
             ),
             severidade=BLOQUEIA,
             sql=f"""
@@ -177,7 +176,7 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
         Verificacao(
             nome="repo_fora_do_escopo",
             descricao=(
-                "Todo repo pertence a lista do config. Violacao aqui e "
+                "Todo repo pertence a lista do config. Violacao indica "
                 "caminho mal formado ou decodificacao errada do diretorio."
             ),
             severidade=AVISA,
@@ -191,8 +190,8 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
             nome="data_do_registro_ausente",
             descricao=(
                 f"O campo `{endpoint.campo_data}` sustenta o watermark e a "
-                "tipagem da silver. Avisa, nao bloqueia: bronze guarda o dado "
-                "torto de proposito, para ele poder ser investigado."
+                "tipagem da silver. Avisa em vez de bloquear: a bronze "
+                "armazena o registro defeituoso para permitir investiga-lo."
             ),
             severidade=AVISA,
             sql=f"""
@@ -281,10 +280,10 @@ def registrar(
         spark.createDataFrame(linhas, schema=schema)
         .write.mode("append")
         # A tabela pode ter sido criada antes de `esperado` e `obtido`
-        # existirem. `mergeSchema` faz o Delta acrescentar as colunas e deixar
-        # NULL nas linhas antigas. Aceitavel aqui -- tabela de controle nossa,
-        # schema declarado no codigo. Em bronze ou silver ficaria desligado:
-        # ali um typo viraria coluna nova sem ninguem revisar.
+        # existirem; `mergeSchema` acrescenta as colunas e deixa NULL nas
+        # linhas antigas. Aceitavel numa tabela de controle com schema
+        # declarado no codigo. Em bronze ou silver fica desligado, senao um
+        # nome digitado errado cria coluna nova sem revisao.
         .option("mergeSchema", "true")
         .saveAsTable(TABELA_QUALIDADE)
     )

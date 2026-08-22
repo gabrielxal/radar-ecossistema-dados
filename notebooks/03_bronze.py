@@ -20,10 +20,6 @@ REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
 
-# Modulo ja importado fica em cache na sessao. Se uma mudanca em `src/` vinda
-# do `git pull` nao surtir efeito, rode `dbutils.library.restartPython()` numa
-# celula e execute o notebook do topo.
-
 from radar import bronze, ingestao
 from radar.config import BRONZE, CATALOG, VOLUME
 
@@ -49,8 +45,9 @@ print("chave   :", ENDPOINT.chave)
 # MAGIC %md
 # MAGIC ## Pre-voo
 # MAGIC
-# MAGIC A bronze depende do que a ingestao aterrissou. Sem arquivo, o
-# MAGIC `spark.read` falha com "Path does not exist" -- que nao diz o que fazer.
+# MAGIC A bronze le o que a ingestao aterrissou. Sem arquivo, o `spark.read`
+# MAGIC falha com "Path does not exist", mensagem que nao identifica a
+# MAGIC dependencia ausente.
 
 # COMMAND ----------
 
@@ -58,8 +55,8 @@ try:
     arquivos = dbutils.fs.ls(ORIGEM)
 except Exception as erro:
     raise RuntimeError(
-        f"landing zone vazia em {ORIGEM}. "
-        "Rode notebooks/02_ingestao.py antes desta carga."
+        f"landing zone vazia em {ORIGEM} "
+        "(preenchida por notebooks/02_ingestao.py)"
     ) from erro
 
 print("particoes de repositorio na origem:", len(arquivos))
@@ -132,8 +129,8 @@ display(
 # MAGIC %md
 # MAGIC ### O payload continua inteiro
 # MAGIC
-# MAGIC Nada foi jogado fora na bronze. Isto aqui e so uma espiada -- na
-# MAGIC silver estes campos viram colunas tipadas, com cast explicito e teste.
+# MAGIC Os campos continuam no payload e sao lidos aqui sem alterar a
+# MAGIC tabela. Na silver eles viram colunas tipadas, com cast explicito.
 
 # COMMAND ----------
 

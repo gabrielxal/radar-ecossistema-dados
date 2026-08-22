@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC Grava o token do GitHub num Secret Scope.
 # MAGIC
-# MAGIC Rodar uma vez por workspace e a cada rotacao do token.
+# MAGIC Escrita unica por workspace, repetida apenas em rotacao de token.
 # MAGIC **Exige entrada humana** -- por isso nao vai para job agendado.
 # MAGIC
 # MAGIC Pre-requisito: token fine-grained, read-only sobre repositorios publicos.
@@ -41,8 +41,8 @@ print("escopos no workspace:", [e.name for e in w.secrets.list_scopes()])
 # MAGIC %md
 # MAGIC ## 2. Campo de entrada
 # MAGIC
-# MAGIC Rode a celula abaixo; o campo aparece no topo do notebook.
-# MAGIC O valor digitado nao vai para o arquivo versionado no Git.
+# MAGIC O widget aparece no topo do notebook. O valor digitado nele fica
+# MAGIC na sessao e nao entra no arquivo versionado no Git.
 
 # COMMAND ----------
 
@@ -53,8 +53,8 @@ dbutils.widgets.text("github_token", "", "Token do GitHub (limpar apos gravar)")
 # MAGIC %md
 # MAGIC ## 3. Gravar
 # MAGIC
-# MAGIC Cole o token no campo do topo, rode esta celula e limpe o campo.
-# MAGIC Campo vazio nao grava nada.
+# MAGIC Le o widget e grava o valor no Secret Scope. Campo vazio nao
+# MAGIC grava nada.
 
 # COMMAND ----------
 
@@ -62,7 +62,7 @@ _token = dbutils.widgets.get("github_token").strip()
 
 if _token:
     w.secrets.put_secret(scope=ESCOPO, key=CHAVE, string_value=_token)
-    print("segredo gravado. LIMPE O CAMPO DO WIDGET agora.")
+    print("segredo gravado. o valor segue visivel no widget ate ser apagado.")
 else:
     print("campo vazio -- nada gravado.")
 
@@ -85,7 +85,8 @@ del _t
 # MAGIC %md
 # MAGIC ## 5. Teste de ponta a ponta
 # MAGIC
-# MAGIC Limite 5000 = token aceito. Limite 60 = nao autenticado.
+# MAGIC O limite por hora identifica o estado da autenticacao:
+# MAGIC 5000 com token aceito, 60 sem autenticacao.
 
 # COMMAND ----------
 
