@@ -12,6 +12,18 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Recarrega os modulos de `src/` a cada execucao. Sem isso, o Python
+# MAGIC importa uma vez por sessao e um `git pull` novo nao tem efeito ate
+# MAGIC reiniciar o interpretador.
+
+# COMMAND ----------
+
+# MAGIC %load_ext autoreload
+# MAGIC %autoreload 2
+
+# COMMAND ----------
+
 import os
 import sys
 from datetime import datetime, timezone
