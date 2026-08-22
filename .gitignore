@@ -220,3 +220,8 @@ __marimo__/
 # Projeto
 data/
 .databricks/
+
+# Sessao Spark local (testes)
+spark-warehouse/
+metastore_db/
+derby.log

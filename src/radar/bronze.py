@@ -105,6 +105,24 @@ def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
         .text(caminho_endpoint(base_volume, endpoint))
     )
 
+    # `_metadata` e coluna oculta exposta por todo file source do Spark.
+    # Materializa-la aqui deixa `projetar` independente da origem dos dados.
+    return projetar(
+        bruto.withColumn("_arquivo_origem", F.col("_metadata.file_path")),
+        endpoint,
+        momento,
+    )
+
+
+def projetar(bruto, endpoint: Endpoint, momento: datetime):
+    """Converte o DataFrame cru no formato da tabela bronze.
+
+    Espera as colunas `value` (a linha do arquivo), `repo` e `dt` (as
+    particoes, como vieram do caminho) e `_arquivo_origem`. Separada da
+    leitura para ser exercitavel sem tocar o sistema de arquivos.
+    """
+    from pyspark.sql import functions as F
+
     return bruto.select(
         F.get_json_object(F.col("value"), f"$.{endpoint.chave}").alias(endpoint.chave),
         # O Spark infere o tipo do valor lido do caminho: `dt=2026-08-21`
@@ -117,9 +135,7 @@ def ler_landing(spark, base_volume: str, endpoint: Endpoint, momento: datetime):
         F.col("dt").cast("string").alias("dt"),
         F.col("value").alias("payload"),
         F.lit(momento).cast("timestamp").alias("_ingerido_em"),
-        # Coluna oculta exposta por todo file source do Spark. Evita gravar
-        # o caminho de origem dentro do proprio payload.
-        F.col("_metadata.file_path").alias("_arquivo_origem"),
+        F.col("_arquivo_origem"),
         F.lit(endpoint.nome).alias("_endpoint"),
     )
 
