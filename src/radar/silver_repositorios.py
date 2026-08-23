@@ -1,13 +1,13 @@
 """Camada silver do endpoint de repositorios.
 
-Grao: **uma linha por repositorio por dia de coleta**. Cada carga acrescenta
+Grao: uma linha por repositorio por dia de coleta. Cada carga acrescenta
 uma foto; o historico se constroi acumulando fotos, nao lendo o passado --
 a API so devolve o estado de agora.
 
 Sem tabela de quarentena, ao contrario da silver de commits, e a diferenca e
 proposital: sao catorze linhas por dia vindas de recurso unico. Payload
 invalido aqui nao e defeito de um registro entre milhares, e sim sinal de que
-a API mudou -- e o payload continua inteiro na bronze, que ja e o lugar de
+a API mudou, e o payload continua inteiro na bronze, que ja e o lugar de
 investiga-lo. O registro descartado e contado e reportado, nunca silencioso.
 """
 
@@ -124,7 +124,7 @@ def criar_tabela(spark) -> None:
 def tipar(df, momento: datetime):
     """Projeta o payload em colunas tipadas, uma decisao por coluna.
 
-    As contagens (`stars`, `forks`, ...) sao **medidas**, nao atributos: elas
+    As contagens (`stars`, `forks`, ...) sao medidas, nao atributos: elas
     mudam todo dia e viram `fct_repo_snapshot` na Etapa 5. Ficam aqui porque
     a foto e a mesma; o que muda e onde cada campo vai parar na gold.
     """

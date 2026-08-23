@@ -58,7 +58,7 @@ print("pre-voo ok")
 # MAGIC %md
 # MAGIC ## 1. dim_tempo
 # MAGIC
-# MAGIC O intervalo cobre **`autorado_em`**, e nao apenas `commitado_em`. A
+# MAGIC O intervalo cobre `autorado_em`, e nao apenas `commitado_em`. A
 # MAGIC diferenca entre as duas chega a 562 dias no dado real: um fato com
 # MAGIC duas chaves de data apontaria para um dia inexistente na dimensao se o
 # MAGIC intervalo comecasse na data de commit mais antiga.
@@ -148,7 +148,7 @@ assert linhas_autor - esperado == 1, "a dimensao nao corresponde a silver"
 # MAGIC %md
 # MAGIC ## 3. dim_repositorio
 # MAGIC
-# MAGIC SCD2 **derivada**: as versoes sao recalculadas comparando cada foto com
+# MAGIC SCD2 derivada: as versoes sao recalculadas comparando cada foto com
 # MAGIC a do dia anterior. Sem estado mantido, sem risco de uma execucao
 # MAGIC perdida deixar a tabela torta.
 
@@ -178,7 +178,7 @@ display(
 # MAGIC ## 4. Bateria da gold
 # MAGIC
 # MAGIC As tres primeiras sao as invariantes da SCD2 declaradas na secao 6.4 do
-# MAGIC documento -- afirmacoes que a modelagem faz e que so um teste de fora
+# MAGIC documento, afirmacoes que a modelagem faz e que so um teste de fora
 # MAGIC comprova.
 
 # COMMAND ----------

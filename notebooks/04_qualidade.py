@@ -4,14 +4,14 @@
 # MAGIC
 # MAGIC Duas perguntas, nesta ordem:
 # MAGIC
-# MAGIC 1. **Chegou tudo?** — contagem de controle entre a landing zone e a bronze
-# MAGIC 2. **Chegou integro?** — bateria de verificacoes sobre a tabela
+# MAGIC 1. Chegou tudo? A contagem de controle compara a landing zone com a bronze
+# MAGIC 2. Chegou integro? A bateria de verificacoes roda sobre a tabela
 # MAGIC
 # MAGIC O resultado de cada execucao e gravado em
 # MAGIC `radar_bronze.qualidade_execucao`. Verificacao sem historico nao
 # MAGIC responde "isso ja estava errado ontem?".
 # MAGIC
-# MAGIC Roda **depois** do `03_bronze`. Falha bloqueante interrompe o notebook.
+# MAGIC Roda depois do `03_bronze`. Falha bloqueante interrompe o notebook.
 
 # COMMAND ----------
 
@@ -63,7 +63,7 @@ print("pre-voo ok")
 # MAGIC
 # MAGIC O numero de linhas da landing zone (ja deduplicada) tem que ser igual
 # MAGIC ao da bronze. Diferenca positiva significa linha que existe no arquivo
-# MAGIC e nao chegou na tabela -- perda silenciosa, o pior tipo.
+# MAGIC e nao chegou na tabela, perda silenciosa, o pior tipo.
 # MAGIC
 # MAGIC Ela vira uma regra da bateria (`reconciliacao_landing_bronze`), com as
 # MAGIC contagens gravadas em `esperado` e `obtido`. E o que permite perguntar
@@ -119,7 +119,7 @@ print(f"bloqueios: {bloqueios} | avisos: {avisos}")
 # MAGIC
 # MAGIC O historico ja foi gravado por `avaliar`, na celula anterior. A ordem e
 # MAGIC deliberada: se a excecao viesse primeiro, a execucao reprovada nao
-# MAGIC entraria no historico -- e e ela que faria falta na investigacao.
+# MAGIC entraria no historico, e e ela que faria falta na investigacao.
 
 # COMMAND ----------
 
@@ -133,9 +133,9 @@ print("nenhuma regra bloqueante falhou")
 # MAGIC %md
 # MAGIC ## 4. Cobertura contra a tabela de controle
 # MAGIC
-# MAGIC Cruzamento entre o que a ingestao **diz** ter gravado e o que a bronze
-# MAGIC **tem**. Nao e uma igualdade: `registros` guarda a ultima carga, nao o
-# MAGIC acumulado. O que se procura aqui e o caso gritante -- repositorio com
+# MAGIC Cruzamento entre o que a ingestao diz ter gravado e o que a bronze
+# MAGIC tem. Nao e uma igualdade: `registros` guarda a ultima carga, nao o
+# MAGIC acumulado. O que se procura aqui e o caso gritante, repositorio com
 # MAGIC carga bem-sucedida e nenhuma linha na bronze.
 
 # COMMAND ----------
@@ -210,7 +210,7 @@ display(
 # MAGIC ### Volume ao longo do tempo
 # MAGIC
 # MAGIC A serie que so existe porque a contagem de controle passou a ser
-# MAGIC gravada. Queda de volume entre duas execucoes e sintoma -- de ETag
+# MAGIC gravada. Queda de volume entre duas execucoes e sintoma, de ETag
 # MAGIC pulando o que nao devia, de watermark adiantado, de arquivo removido
 # MAGIC da landing zone.
 

@@ -192,7 +192,7 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
             nome="carga_truncada",
             descricao=(
                 "Nenhuma carga parou no teto de paginas. Truncagem nao "
-                "corrompe o que chegou, mas deixa historico para tras -- e o "
+                "corrompe o que chegou, mas deixa historico para tras, e o "
                 "watermark avanca por cima, tornando a falta permanente."
             ),
             severidade=AVISA,
@@ -366,7 +366,7 @@ def verificacoes_gold() -> tuple[Verificacao, ...]:
     """A bateria da gold. Aqui as regras sao sobre o modelo, nao sobre o dado.
 
     As tres primeiras sao as invariantes da SCD2 declaradas na secao 6.4 do
-    documento de projeto -- afirmacoes que a modelagem faz e que so um teste
+    documento de projeto: sao afirmacoes que a modelagem faz e que so um teste
     de fora comprova.
     """
     tempo = gold.TABELA_TEMPO
@@ -501,7 +501,7 @@ def verificacoes_fatos() -> tuple[Verificacao, ...]:
     """A bateria dos fatos: grao e integridade referencial.
 
     O Unity Catalog registra chave estrangeira mas nao a impoe. Estas
-    verificacoes sao o que substitui a imposicao do banco -- sem elas, um
+    verificacoes sao o que substitui a imposicao do banco. Sem elas, um
     fato apontando para dimensao inexistente so apareceria como linha que
     some da consulta, sem erro nenhum.
     """
@@ -727,7 +727,7 @@ def reconciliar(
 ) -> Reconciliacao:
     """Contagem de controle: o que ha na landing zone chegou inteiro na bronze?
 
-    Compara contra a origem ja deduplicada -- a sobreposicao de dias faz o
+    Compara contra a origem ja deduplicada, porque a sobreposicao de dias faz o
     JSONL bruto ter mais linhas do que a bronze deve ter, por desenho.
     """
     fonte = bronze.deduplicar(

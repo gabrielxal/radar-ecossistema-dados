@@ -22,7 +22,7 @@ TABELA_AUTOR = fqn(GOLD, "dim_autor")
 # --------------------------------------------------------------------------
 
 # Separador improvavel em qualquer valor de negocio. Com um separador comum
-# -- `|`, `-` -- as partes ("a|b") e ("a", "b") produziriam o mesmo texto e,
+# como `|` ou `-`, as partes ("a|b") e ("a", "b") produziriam o mesmo texto e,
 # portanto, a mesma chave para entidades diferentes.
 SEPARADOR = ""
 
@@ -95,7 +95,7 @@ def gerar_dim_tempo(spark, inicio: date, fim: date):
     """Gera um dia por linha entre as duas datas, inclusive.
 
     A unica dimensao que nao vem de dado nenhum. Extrai-la dos commits
-    deixaria de fora os dias sem commit -- e uma serie temporal com lacunas
+    deixaria de fora os dias sem commit, e uma serie temporal com lacunas
     mente por omissao: o grafico pula o dia parado em vez de mostrar zero.
 
     A chave e `aaaammdd`, e nao um hash. Tempo e a excecao consagrada a
@@ -178,8 +178,8 @@ COMMENT 'Autores de commit. SCD1: o valor mais recente substitui o anterior.'
 def montar_dim_autor(commits, momento: datetime):
     """Uma linha por autor, a partir da silver de commits.
 
-    **Chave hibrida**: `github_id` quando existe, `autor_email` quando nao.
-    Nenhum dos dois e chave natural limpa -- `github_id` falta em 1,4% dos
+    Chave hibrida: `github_id` quando existe, `autor_email` quando nao.
+    Nenhum dos dois e chave natural limpa: `github_id` falta em 1,4% dos
     commits, e o e-mail fragmenta quem usa mais de um endereco. Cada um
     cobre exatamente o buraco do outro.
 
@@ -187,8 +187,8 @@ def montar_dim_autor(commits, momento: datetime):
     commit e nao resolvido noutro: seria a mesma pessoa em duas linhas. Foi
     medido (zero ocorrencias) e virou verificacao bloqueante da bateria.
 
-    **SCD1**: o commit mais recente define os atributos. O projeto pergunta
-    sobre atividade, nao sobre historico de nomes -- versionar `login` seria
+    SCD1: o commit mais recente define os atributos. O projeto pergunta
+    sobre atividade, nao sobre historico de nomes, e versionar `login` seria
     complexidade sem demanda.
     """
     from pyspark.sql import Window
@@ -234,7 +234,7 @@ def linha_desconhecida(spark, momento: datetime):
     """O membro que acolhe o fato sem autor identificavel.
 
     Sem ele, um commit sem `github_id` e sem e-mail nao teria para onde
-    apontar, e a juncao do fato deixaria de ser total -- perdendo a linha ou
+    apontar, e a juncao do fato deixaria de ser total, perdendo a linha ou
     exigindo `LEFT JOIN` e nulo espalhado pelas consultas.
 
     Construida pela mesma `chave_substituta` das demais: um valor fixo
@@ -260,14 +260,14 @@ def linha_desconhecida(spark, momento: datetime):
 
 
 # --------------------------------------------------------------------------
-# dim_repositorio -- SCD2 derivada, nao mantida
+# dim_repositorio: SCD2 derivada, nao mantida
 # --------------------------------------------------------------------------
 
 TABELA_REPOSITORIO = fqn(GOLD, "dim_repositorio")
 
 # Atributos cuja mudanca abre uma versao nova. As contagens (stars, forks,
 # issues) ficam de fora de proposito: mudam todo dia e explodiriam a
-# dimensao -- 14 repositorios x 365 dias numa tabela que deve ter 14 linhas.
+# dimensao: 14 repositorios x 365 dias numa tabela que deve ter 14 linhas.
 # Sao medidas, e vao para `fct_repo_snapshot` na Etapa 5.
 ATRIBUTOS_VERSIONADOS = (
     "nome_completo",
@@ -287,8 +287,8 @@ COLUNAS_DIM_REPOSITORIO = (
 )
 
 # A primeira versao de cada repositorio vale desde aqui. O fato comeca antes
-# da primeira foto -- ha commits de maio e a serie de fotos comeca em agosto
-# -- e sem isso a juncao por vigencia descartaria tres meses de historico.
+# da primeira foto. Ha commits de maio e a serie de fotos comeca em agosto,
+# entao sem isso a juncao por vigencia descartaria tres meses de historico.
 #
 # E suposicao, nao observacao: assume-se que o estado observado ja valia
 # antes. `observado_de` guarda o dia real da primeira foto, para a suposicao
@@ -323,19 +323,19 @@ COMMENT 'SCD2 de repositorio, derivada das fotos diarias da silver.'
 def montar_dim_repositorio(repositorios, momento: datetime):
     """Deriva a SCD2 a partir da serie de fotos diarias.
 
-    **A dimensao e derivada, nao mantida.** O caminho classico da SCD2 e
+    A dimensao e derivada, nao mantida. O caminho classico da SCD2 e
     incremental: comparar a carga de hoje com a versao vigente e fechar a
     anterior quando algo muda. Isso guarda estado, e estado errado nao se
-    corrige sozinho -- uma execucao perdida deixa a tabela permanentemente
+    corrige sozinho: uma execucao perdida deixa a tabela permanentemente
     torta.
 
-    Aqui a silver guarda **todas** as fotos, entao o historico inteiro pode
+    Aqui a silver guarda todas as fotos, entao o historico inteiro pode
     ser recalculado do zero a cada execucao. As versoes sao detectadas
     comparando cada foto com a do dia anterior; o resultado e o mesmo
     sempre, e uma execucao perdida se conserta com a proxima.
 
     O preco e reprocessar tudo. Com 14 repositorios e uma foto por dia,
-    isso e irrelevante -- e continua sendo por muitos anos.
+    isso e irrelevante, e continua sendo por muitos anos.
     """
     from pyspark.sql import Window
     from pyspark.sql import functions as F
@@ -356,7 +356,7 @@ def montar_dim_repositorio(repositorios, momento: datetime):
     linha_do_tempo = Window.partitionBy("repo_id").orderBy("dia")
 
     # Uma foto abre versao nova quando difere da anterior. A primeira foto
-    # de cada repositorio sempre abre -- nao ha anterior com que comparar.
+    # de cada repositorio sempre abre, porque nao ha anterior com que comparar.
     mudou = (
         F.lag("_impressao").over(linha_do_tempo).isNull()
         | (F.col("_impressao") != F.lag("_impressao").over(linha_do_tempo))
@@ -436,7 +436,7 @@ def escrever(spark, df, tabela: str) -> int:
 
 
 # --------------------------------------------------------------------------
-# fct_commit -- fato de transacao
+# fct_commit: fato de transacao
 # --------------------------------------------------------------------------
 
 TABELA_FCT_COMMIT = fqn(GOLD, "fct_commit")
@@ -459,7 +459,7 @@ COLUNAS_FCT_COMMIT = (
 def ddl_fct_commit() -> str:
     """DDL do fato de commits.
 
-    **Grao: um commit.** Evento pontual e imutavel -- so insere, nunca
+    Grao: um commit. Evento pontual e imutavel, que so insere e nunca
     atualiza. E o tipo mais simples dos tres, e serve de referencia para os
     outros dois.
     """
@@ -485,12 +485,12 @@ COMMENT 'Fato de transacao. Grao: um commit. Somente insercao.'
 def montar_fct_commit(commits, repositorios, autores, momento: datetime):
     """Liga cada commit as tres dimensoes.
 
-    **A juncao com `dim_repositorio` e por vigencia**, e nao pela versao
+    A juncao com `dim_repositorio` e por vigencia, e nao pela versao
     atual: um commit de junho pertence ao estado que o repositorio tinha em
-    junho. E o motivo de a SCD2 existir -- usar `flag_atual` aqui jogaria
+    junho. E o motivo de a SCD2 existir: usar `flag_atual` aqui jogaria
     fora a historia inteira que a dimensao guarda.
 
-    **`sk_data` e calculada, nao buscada.** A chave de tempo e `aaaammdd`,
+    `sk_data` e calculada, nao buscada. A chave de tempo e `aaaammdd`,
     entao a data ja e a chave: duas juncoes a menos. E o dividendo da chave
     inteligente decidida no passo 4.2. A integridade referencial passa a ser
     responsabilidade da bateria, que confere se toda chave existe na
@@ -540,7 +540,7 @@ def montar_fct_commit(commits, repositorios, autores, momento: datetime):
 
 
 # --------------------------------------------------------------------------
-# fct_repo_snapshot -- fato de snapshot periodico
+# fct_repo_snapshot: fato de snapshot periodico
 # --------------------------------------------------------------------------
 
 TABELA_FCT_SNAPSHOT = fqn(GOLD, "fct_repo_snapshot")
@@ -561,7 +561,7 @@ COLUNAS_FCT_SNAPSHOT = (
 def ddl_fct_repo_snapshot() -> str:
     """DDL do fato de snapshot periodico.
 
-    **Grao: um repositorio por dia.** Todas as medidas sao **semi-aditivas**:
+    Grao: um repositorio por dia. Todas as medidas sao semi-aditivas:
     somar entre repositorios num dia produz o total do ecossistema; somar o
     mesmo repositorio ao longo de trinta dias conta a mesma estrela trinta
     vezes. Ao longo do tempo as operacoes validas sao ultimo valor, media, ou

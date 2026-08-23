@@ -177,7 +177,7 @@ class GitHubClient:
 
         `estado`, quando fornecido, recebe `{"truncado": bool}` ao fim do
         percurso. `True` significa que o teto de paginas interrompeu um
-        percurso que ainda tinha proxima pagina -- ou seja, ficou dado para
+        percurso que ainda tinha proxima pagina, ou seja, ficou dado para
         tras. Sem esse canal, quem consome com `list()` nao teria como saber
         por que o gerador parou, e a coleta parcial passaria por completa.
 

@@ -21,8 +21,8 @@ from radar.controle import Checkpoint, calcular_watermark, parametros_de_busca
 class Endpoint:
     """Metadados de um endpoint da API.
 
-    Dois formatos convivem aqui. **Lista** e paginada e incremental: commits
-    chegam aos milhares e so os novos interessam. **Snapshot** e recurso
+    Dois formatos convivem aqui. Lista e paginada e incremental: commits
+    chegam aos milhares e so os novos interessam. Snapshot e recurso
     unico e sem historico: `/repos/{repo}` devolve o estado de agora, e o
     historico se constroi coletando todo dia.
     """
@@ -166,11 +166,11 @@ def proximo_checkpoint(
 ) -> Checkpoint:
     """Checkpoint a gravar depois de uma ingestao.
 
-    Quando a coleta foi truncada pelo teto de paginas, o watermark **nao
-    avanca**. A API entrega os registros do mais novo para o mais antigo e
+    Quando a coleta foi truncada pelo teto de paginas, o watermark nao
+    avanca. A API entrega os registros do mais novo para o mais antigo e
     `since` so aceita limite inferior: nao ha como voltar no tempo para buscar
     o que ficou para tras. Avancar tornaria a falta permanente e invisivel.
-    Preservar mantem a proxima execucao tentando o mesmo intervalo -- ela
+    Preservar mantem a proxima execucao tentando o mesmo intervalo: ela
     recoleta o que ja tem, sem duplicar (a carga e idempotente), e completa
     quando o teto for suficiente.
     """
@@ -257,7 +257,7 @@ def ingerir_snapshot(
     devolve o estado de agora.
 
     Sem sentinela tambem, e isso e deliberado. Um `304` economizaria uma
-    requisicao e deixaria **um buraco na serie temporal** -- o dia sem foto
+    requisicao e deixaria um buraco na serie temporal, porque o dia sem foto
     nao e o dia sem mudanca, e quem consulta nao consegue distinguir os
     dois. Catorze requisicoes por dia e preco baixo por uma serie continua.
     """
@@ -301,7 +301,7 @@ def ingerir(
     """Sentinela, coleta e gravacao de um par (repo, endpoint)."""
     # Checkpoint truncado significa historico por coletar. A sentinela olha
     # apenas o topo da lista: se nada mudou la, ela responde 304 e o
-    # repositorio seria pulado -- justamente aquele que se sabe incompleto.
+    # repositorio seria pulado, logo aquele que se sabe incompleto.
     # Ignorar o ETag nesse caso e o que permite a coleta continuar.
     truncado_antes = bool(checkpoint and checkpoint.status == "truncado")
     etag_anterior = None if truncado_antes else (checkpoint.etag if checkpoint else None)

@@ -2,8 +2,8 @@
 # MAGIC %md
 # MAGIC # 09 - Fatos
 # MAGIC
-# MAGIC Dois dos tres tipos de fato do Kimball. O terceiro -- snapshot
-# MAGIC acumulado, `fct_issue` -- exige o endpoint de issues e fica para a
+# MAGIC Dois dos tres tipos de fato do Kimball. O terceiro, snapshot
+# MAGIC acumulado, `fct_issue`, exige o endpoint de issues e fica para a
 # MAGIC etapa seguinte.
 # MAGIC
 # MAGIC | Fato | Tipo | Grao | Medidas |
@@ -62,7 +62,7 @@ repositorios = spark.table(silver_repositorios.TABELA_REPOSITORIOS)
 # MAGIC %md
 # MAGIC ## 1. fct_commit
 # MAGIC
-# MAGIC A juncao com `dim_repositorio` e **por vigencia**, nao por `flag_atual`:
+# MAGIC A juncao com `dim_repositorio` e por vigencia, nao por `flag_atual`:
 # MAGIC um commit de junho pertence ao estado que o repositorio tinha em junho.
 # MAGIC Usar a versao atual jogaria fora a historia que a SCD2 guarda.
 
@@ -98,7 +98,7 @@ display(
 # MAGIC ## 2. fct_repo_snapshot
 # MAGIC
 # MAGIC Com uma foto, sao 14 linhas. A serie se constroi rodando o `07`
-# MAGIC diariamente: este e o fato que precisa de **tempo**, nao de codigo.
+# MAGIC diariamente: este e o fato que precisa de tempo, nao de codigo.
 
 # COMMAND ----------
 
@@ -116,9 +116,9 @@ assert linhas_snapshot == nas_fotos, "o fato nao corresponde as fotos"
 # MAGIC %md
 # MAGIC ## 3. Bateria dos fatos
 # MAGIC
-# MAGIC O Unity Catalog registra chave estrangeira mas **nao a impoe**. Estas
+# MAGIC O Unity Catalog registra chave estrangeira mas nao a impoe. Estas
 # MAGIC verificacoes substituem a imposicao do banco: sem elas, um fato
-# MAGIC apontando para dimensao inexistente nao gera erro -- a linha apenas
+# MAGIC apontando para dimensao inexistente nao gera erro, a linha apenas
 # MAGIC some da consulta com juncao.
 
 # COMMAND ----------
@@ -161,8 +161,8 @@ print("nenhuma regra bloqueante falhou")
 # MAGIC %md
 # MAGIC ## 4. O modelo respondendo
 # MAGIC
-# MAGIC Consultas que exigem o star schema inteiro -- fato, tres dimensoes e,
-# MAGIC na primeira delas, a dimensao de tempo nos **dois papeis**.
+# MAGIC Consultas que exigem o star schema inteiro, fato, tres dimensoes e,
+# MAGIC na primeira delas, a dimensao de tempo nos dois papeis.
 
 # COMMAND ----------
 
@@ -193,7 +193,7 @@ display(
 # MAGIC %md
 # MAGIC #### A mesma pergunta, com as decisoes analiticas explicitas
 # MAGIC
-# MAGIC A consulta acima usa `sk_data_commit` e nao filtra nada -- e por isso
+# MAGIC A consulta acima usa `sk_data_commit` e nao filtra nada, e por isso
 # MAGIC responde errado. Tres correcoes, cada uma com motivo:
 # MAGIC
 # MAGIC | Correcao | Por que |
@@ -285,9 +285,9 @@ display(
 # MAGIC %md
 # MAGIC ### O snapshot e a semi-aditividade
 # MAGIC
-# MAGIC Somar estrelas **entre repositorios num dia** produz o total do
+# MAGIC Somar estrelas entre repositorios num dia produz o total do
 # MAGIC ecossistema. Somar o mesmo repositorio ao longo de dias contaria a
-# MAGIC mesma estrela varias vezes -- por isso a agregacao no tempo e `max`,
+# MAGIC mesma estrela varias vezes, por isso a agregacao no tempo e `max`,
 # MAGIC nunca `sum`.
 
 # COMMAND ----------

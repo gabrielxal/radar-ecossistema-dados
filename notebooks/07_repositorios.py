@@ -6,8 +6,8 @@
 # MAGIC lista paginada. Atravessa as tres camadas num notebook so, porque sao
 # MAGIC catorze linhas por dia.
 # MAGIC
-# MAGIC **Grao**: uma foto por repositorio por dia. A API devolve o estado de
-# MAGIC agora e nao tem historico -- ele se constroi acumulando fotos.
+# MAGIC Grao: uma foto por repositorio por dia. A API devolve o estado de
+# MAGIC agora e nao tem historico, ele se constroi acumulando fotos.
 # MAGIC
 # MAGIC Alimenta a `dim_repositorio` (Etapa 4) e a `fct_repo_snapshot` (Etapa 5).
 
@@ -51,7 +51,7 @@ print("repositorios :", len(REPOS_ALVO))
 # MAGIC
 # MAGIC Sem paginacao, sem watermark e sem sentinela. A ausencia da sentinela e
 # MAGIC deliberada: um `304` economizaria uma requisicao e deixaria um dia sem
-# MAGIC foto -- e dia sem foto nao se distingue de dia sem mudanca.
+# MAGIC foto, e dia sem foto nao se distingue de dia sem mudanca.
 
 # COMMAND ----------
 
@@ -155,8 +155,8 @@ display(
 # MAGIC ### A serie de fotos
 # MAGIC
 # MAGIC Com um dia so, a `dim_repositorio` tera uma versao por repositorio. O
-# MAGIC comportamento tipo 2 aparece quando um atributo mudar entre duas fotos
-# MAGIC -- o que, para licenca e linguagem, leva meses. O mecanismo esta
+# MAGIC comportamento tipo 2 aparece quando um atributo mudar entre duas fotos,
+# MAGIC o que para licenca e linguagem leva meses. O mecanismo esta
 # MAGIC coberto por teste com mudanca sintetica.
 
 # COMMAND ----------

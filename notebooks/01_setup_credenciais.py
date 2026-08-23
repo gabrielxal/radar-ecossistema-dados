@@ -5,7 +5,7 @@
 # MAGIC Grava o token do GitHub num Secret Scope.
 # MAGIC
 # MAGIC Escrita unica por workspace, repetida apenas em rotacao de token.
-# MAGIC **Exige entrada humana** -- por isso nao vai para job agendado.
+# MAGIC Exige entrada humana, por isso nao vai para job agendado.
 # MAGIC
 # MAGIC Pre-requisito: token fine-grained, read-only sobre repositorios publicos.
 

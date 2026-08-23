@@ -122,8 +122,8 @@ def _categoria(coluna):
 def _instante(coluna):
     """Data ISO da API em TIMESTAMP.
 
-    `try_to_timestamp` e nao `to_timestamp`: com ANSI ligado -- o padrao em
-    runtime recente do Databricks -- o cast comum lanca excecao e derruba a
+    `try_to_timestamp` e nao `to_timestamp`: com ANSI ligado, que e o padrao em
+    runtime recente do Databricks, o cast comum lanca excecao e derruba a
     carga inteira por causa de um registro. A versao `try_` devolve NULL, e o
     NULL e o que a quarentena procura.
     """
@@ -171,7 +171,7 @@ def tipar(df, momento: datetime):
 
         # Usuario do GitHub: resolvido pela plataforma, ausente quando o
         # e-mail do commit nao esta associado a conta nenhuma. `id` e a chave
-        # estavel -- login muda quando a pessoa renomeia a conta.
+        # estavel, porque login muda quando a pessoa renomeia a conta.
         _texto(usuario["login"]).alias("github_login"),
         usuario["id"].alias("github_id"),
         _categoria(usuario["type"]).alias("github_tipo"),
@@ -382,7 +382,7 @@ def filtrar_novos(df, checkpoint):
     """So o que entrou na bronze depois do ultimo processamento.
 
     Comparacao estrita, sem janela de sobreposicao: linha da bronze nao muda
-    depois de gravada -- o MERGE de la nao tem ramo de UPDATE -- entao
+    depois de gravada, ja que o MERGE de la nao tem ramo de UPDATE, entao
     reprocessar a fronteira nao traria nada de novo.
     """
     from pyspark.sql import functions as F
@@ -424,12 +424,12 @@ def sql_merge_aprovados(origem: str) -> str:
 
     Aqui existe `WHEN MATCHED THEN UPDATE`, e a bronze nao tem. A diferenca e
     de natureza: linha de bronze e copia da origem, e corrigi-la destruiria a
-    evidencia. Linha de silver e derivada -- se a regra de normalizacao
+    evidencia. Linha de silver e derivada: se a regra de normalizacao
     melhorar, reprocessar deve substituir o valor antigo pelo novo.
 
     A origem e uma subconsulta sobre tabela, e nao uma view temporaria sobre
     DataFrame calculado: o ramo de UPDATE faz o Delta ler a origem duas vezes,
-    e para garantir leituras iguais ele materializaria o plano -- o que exige
+    e para garantir leituras iguais ele materializaria o plano, o que exige
     persist, indisponivel no Serverless.
     """
     return f"""
@@ -444,7 +444,7 @@ def sql_merge_aprovados(origem: str) -> str:
 def sql_inserir_rejeitados(origem: str) -> str:
     """Insercao simples: rejeicao e evento de uma execucao, nao entidade.
 
-    Nao ha MERGE possivel -- `sha` pode ser nulo, que e justamente um dos
+    Nao ha MERGE possivel: `sha` pode ser nulo, que e um dos
     motivos de rejeicao. E manter a tentativa anterior mostra desde quando o
     registro vem falhando.
     """
@@ -454,8 +454,8 @@ def sql_inserir_rejeitados(origem: str) -> str:
 def _preparar_lote(spark, classificado) -> None:
     """Grava o lote classificado numa tabela, antes de rotear.
 
-    Resolve dois problemas de uma vez. Sem `cache()` -- que o Serverless nao
-    oferece -- cada acao reprocessaria o `from_json` e os casts desde a
+    Resolve dois problemas de uma vez. Sem `cache()`, que o Serverless nao
+    oferece, cada acao reprocessaria o `from_json` e os casts desde a
     bronze. E o MERGE precisa de uma origem estavel, que uma tabela e e um
     DataFrame calculado nao e.
     """

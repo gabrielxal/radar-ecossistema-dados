@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC Le o JSONL cru da landing zone e carrega na tabela Delta bronze.
 # MAGIC
-# MAGIC Regra da camada: **nao se limpa nada**. O payload entra como STRING,
+# MAGIC Regra da camada: nao se limpa nada. O payload entra como STRING,
 # MAGIC exatamente como a API devolveu. Tipagem e contrato sao da silver.
 # MAGIC
 # MAGIC Idempotente: a carga e um MERGE por chave natural, entao reexecutar
@@ -92,7 +92,7 @@ print(f"total na tabela       : {resultado.linhas_na_tabela}")
 # MAGIC ## Prova de idempotencia
 # MAGIC
 # MAGIC A mesma carga, de novo, sobre os mesmos arquivos. `linhas novas` tem
-# MAGIC que ser **0**: o MERGE so tem `WHEN NOT MATCHED`, entao chave que ja
+# MAGIC que ser 0: o MERGE so tem `WHEN NOT MATCHED`, entao chave que ja
 # MAGIC existe e ignorada.
 
 # COMMAND ----------

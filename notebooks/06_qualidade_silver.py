@@ -4,8 +4,8 @@
 # MAGIC
 # MAGIC As mesmas duas perguntas da bronze, com respostas diferentes:
 # MAGIC
-# MAGIC 1. **Chegou tudo?** — `bronze = silver + quarentena`
-# MAGIC 2. **Chegou integro?** — bateria sobre colunas tipadas
+# MAGIC 1. Chegou tudo? A igualdade `bronze = silver + quarentena` tem de fechar
+# MAGIC 2. Chegou integro? A bateria roda sobre as colunas tipadas
 # MAGIC
 # MAGIC A diferenca esta na segunda. Comparar duas datas exige que elas sejam
 # MAGIC datas: sao verificacoes que a bronze nao teria como fazer.

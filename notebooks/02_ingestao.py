@@ -10,10 +10,10 @@
 # MAGIC
 # MAGIC ## Parametros
 # MAGIC
-# MAGIC - **dias_historico** — janela da primeira carga. Sem isso, o primeiro
+# MAGIC - **dias_historico**, janela da primeira carga. Sem isso, o primeiro
 # MAGIC   `paginar` percorre o historico inteiro e estoura a quota.
-# MAGIC - **limite_paginas** — teto de paginas por repositorio. Valvula de seguranca.
-# MAGIC - **repos** — lista separada por virgula. Vazio = todos do `config.py`.
+# MAGIC - **limite_paginas**, teto de paginas por repositorio. Valvula de seguranca.
+# MAGIC - **repos**, lista separada por virgula. Vazio = todos do `config.py`.
 
 # COMMAND ----------
 

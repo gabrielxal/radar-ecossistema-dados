@@ -9,7 +9,7 @@
 # MAGIC Incremental por watermark sobre `_ingerido_em`, com checkpoint proprio
 # MAGIC (`commits@silver`) na mesma tabela de controle da ingestao.
 # MAGIC
-# MAGIC A invariante da camada: **bronze = silver + quarentena**.
+# MAGIC A invariante da camada: bronze = silver + quarentena.
 
 # COMMAND ----------
 
