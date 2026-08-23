@@ -497,6 +497,145 @@ def verificacoes_gold() -> tuple[Verificacao, ...]:
     )
 
 
+def verificacoes_fatos() -> tuple[Verificacao, ...]:
+    """A bateria dos fatos: grao e integridade referencial.
+
+    O Unity Catalog registra chave estrangeira mas nao a impoe. Estas
+    verificacoes sao o que substitui a imposicao do banco -- sem elas, um
+    fato apontando para dimensao inexistente so apareceria como linha que
+    some da consulta, sem erro nenhum.
+    """
+    commit = gold.TABELA_FCT_COMMIT
+    snapshot = gold.TABELA_FCT_SNAPSHOT
+    tempo = gold.TABELA_TEMPO
+    autor = gold.TABELA_AUTOR
+    repositorio = gold.TABELA_REPOSITORIO
+
+    return (
+        Verificacao(
+            nome="grao_do_fct_commit",
+            descricao=(
+                "Um commit por linha. Chave repetida significa juncao que "
+                "multiplicou linha, e toda medida agregada fica inflada."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT sha, sk_repositorio FROM {commit}
+                    GROUP BY sha, sk_repositorio HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="grao_do_fct_repo_snapshot",
+            descricao=(
+                "Um repositorio por dia. Duas fotos do mesmo dia contariam "
+                "as mesmas estrelas duas vezes."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT repo_id, sk_data FROM {snapshot}
+                    GROUP BY repo_id, sk_data HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="fato_sem_dimensao_de_repositorio",
+            descricao=(
+                "Toda chave de repositorio existe na dimensao. Orfao nao "
+                "gera erro: a linha apenas some da consulta com juncao."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT f.sk_repositorio FROM {commit} f
+                    LEFT ANTI JOIN {repositorio} d USING (sk_repositorio)
+                    UNION ALL
+                    SELECT f.sk_repositorio FROM {snapshot} f
+                    LEFT ANTI JOIN {repositorio} d USING (sk_repositorio)
+                )
+            """,
+        ),
+        Verificacao(
+            nome="fato_sem_dimensao_de_autor",
+            descricao=(
+                "Toda chave de autor existe na dimensao, inclusive a do "
+                "membro desconhecido."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {commit} f
+                LEFT ANTI JOIN {autor} d USING (sk_autor)
+            """,
+        ),
+        Verificacao(
+            nome="fato_sem_dimensao_de_tempo",
+            descricao=(
+                "As duas chaves de tempo existem na dimensao. Sao calculadas "
+                "em vez de buscadas, entao esta e a unica rede que resta."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT sk_data_commit AS sk FROM {commit}
+                    UNION ALL
+                    SELECT sk_data_autoria FROM {commit} WHERE sk_data_autoria IS NOT NULL
+                    UNION ALL
+                    SELECT sk_data FROM {snapshot}
+                ) f
+                LEFT ANTI JOIN {tempo} t ON t.sk_tempo = f.sk
+            """,
+        ),
+        Verificacao(
+            nome="chave_obrigatoria_nula_no_fato",
+            descricao=(
+                "Chave nula no fato e juncao perdida em silencio. A data de "
+                "autoria pode faltar; repositorio, autor e data do commit nao."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {commit}
+                WHERE sk_repositorio IS NULL
+                   OR sk_autor IS NULL
+                   OR sk_data_commit IS NULL
+            """,
+        ),
+        Verificacao(
+            nome="commit_ligado_a_versao_futura",
+            descricao=(
+                "Nenhum commit aponta para versao que so passou a valer "
+                "depois dele. Verifica de fora a juncao por vigencia."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {commit} f
+                JOIN {repositorio} d USING (sk_repositorio)
+                JOIN {tempo} t ON t.sk_tempo = f.sk_data_commit
+                WHERE t.data < d.valido_de
+                   OR (d.valido_ate IS NOT NULL AND t.data >= d.valido_ate)
+            """,
+        ),
+        Verificacao(
+            nome="desconhecido_usado_com_chave_resolvivel",
+            descricao=(
+                "O membro desconhecido so acolhe quem nao tem chave natural. "
+                "Usado a mais, esconde autor que existia e podia ser ligado."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {commit} f
+                JOIN {autor} d USING (sk_autor)
+                WHERE d.origem_da_chave = '{gold.ORIGEM_DESCONHECIDA}'
+            """,
+        ),
+    )
+
+
 def resumo(resultados: list[Resultado]) -> tuple[int, int]:
     """(quantos bloqueios falharam, quantos avisos falharam)."""
     bloqueios = sum(1 for r in resultados if not r.passou and r.severidade == BLOQUEIA)

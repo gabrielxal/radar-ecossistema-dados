@@ -109,3 +109,55 @@ def test_chave_natural_do_repositorio_e_o_id_numerico():
 def test_ddl_do_repositorio_declara_todas_as_colunas():
     for coluna in gold.COLUNAS_DIM_REPOSITORIO:
         assert coluna in gold.ddl_dim_repositorio()
+
+
+# --------------------------------------------------------------------------
+# Os fatos: grao, aditividade e o que o DDL precisa declarar
+# --------------------------------------------------------------------------
+
+def test_fatos_ficam_no_schema_da_gold():
+    assert gold.TABELA_FCT_COMMIT == "workspace.radar_gold.fct_commit"
+    assert gold.TABELA_FCT_SNAPSHOT == "workspace.radar_gold.fct_repo_snapshot"
+
+
+def test_fct_commit_tem_duas_chaves_de_tempo():
+    # A dimensao com papeis: a mesma tabela referenciada duas vezes.
+    assert "sk_data_commit" in gold.COLUNAS_FCT_COMMIT
+    assert "sk_data_autoria" in gold.COLUNAS_FCT_COMMIT
+
+
+def test_sha_e_dimensao_degenerada():
+    # Fica no fato, sem tabela propria: uma dim_commit teria o tamanho do
+    # fato e nenhum atributo a acrescentar.
+    assert "sha" in gold.COLUNAS_FCT_COMMIT
+    assert "DIMENSAO DEGENERADA" in gold.ddl_fct_commit()
+
+
+def test_medida_nao_aditiva_e_declarada():
+    # Nada no SQL impede somar dias. A defesa e o comentario da coluna.
+    assert "dias_ate_o_commit     INT                COMMENT 'NAO ADITIVA" in gold.ddl_fct_commit()
+
+
+def test_medidas_do_snapshot_sao_declaradas_semi_aditivas():
+    ddl = gold.ddl_fct_repo_snapshot()
+    assert ddl.count("SEMI-ADITIVA") == len(gold.MEDIDAS_SNAPSHOT)
+
+
+def test_snapshot_guarda_a_chave_natural_para_o_grao_ser_verificavel():
+    # `sk_repositorio` muda com a versao; `repo_id` e o que identifica o
+    # repositorio ao longo do tempo.
+    assert "repo_id" in gold.COLUNAS_FCT_SNAPSHOT
+    assert "DIMENSAO DEGENERADA" in gold.ddl_fct_repo_snapshot()
+
+
+def test_ddl_dos_fatos_declara_todas_as_colunas():
+    for coluna in gold.COLUNAS_FCT_COMMIT:
+        assert coluna in gold.ddl_fct_commit()
+    for coluna in gold.COLUNAS_FCT_SNAPSHOT:
+        assert coluna in gold.ddl_fct_repo_snapshot()
+
+
+def test_vigencia_da_primeira_versao_abre_para_tras():
+    from datetime import date
+    assert gold.INICIO_DOS_TEMPOS == date(1900, 1, 1)
+    assert "assumido, nao observado" in gold.ddl_dim_repositorio()

@@ -283,8 +283,17 @@ ATRIBUTOS_VERSIONADOS = (
 COLUNAS_DIM_REPOSITORIO = (
     ("sk_repositorio", "repo_id", "repo")
     + ATRIBUTOS_VERSIONADOS
-    + ("valido_de", "valido_ate", "flag_atual", "_processado_em")
+    + ("valido_de", "observado_de", "valido_ate", "flag_atual", "_processado_em")
 )
+
+# A primeira versao de cada repositorio vale desde aqui. O fato comeca antes
+# da primeira foto -- ha commits de maio e a serie de fotos comeca em agosto
+# -- e sem isso a juncao por vigencia descartaria tres meses de historico.
+#
+# E suposicao, nao observacao: assume-se que o estado observado ja valia
+# antes. `observado_de` guarda o dia real da primeira foto, para a suposicao
+# ficar auditavel de dentro do dado.
+INICIO_DOS_TEMPOS = date(1900, 1, 1)
 
 
 def ddl_dim_repositorio() -> str:
@@ -300,7 +309,8 @@ CREATE TABLE IF NOT EXISTS {TABELA_REPOSITORIO} (
     repo_id         BIGINT    NOT NULL COMMENT 'chave natural; sobrevive a renomeacao',
     repo            STRING             COMMENT 'owner/nome no dia em que a versao comecou',
 {atributos}
-    valido_de       DATE      NOT NULL COMMENT 'primeiro dia em que esta versao foi observada',
+    valido_de       DATE      NOT NULL COMMENT 'inicio da vigencia; na 1a versao e assumido, nao observado',
+    observado_de    DATE      NOT NULL COMMENT 'dia real da primeira foto com este estado',
     valido_ate      DATE               COMMENT 'dia em que outra versao a substituiu; NULL se vigente',
     flag_atual      BOOLEAN   NOT NULL COMMENT 'versao vigente',
     _processado_em  TIMESTAMP          COMMENT 'quando a dimensao foi derivada'
@@ -363,23 +373,31 @@ def montar_dim_repositorio(repositorios, momento: datetime):
     resumo = (
         versoes.groupBy("repo_id", "_versao")
         .agg(
-            F.min("dia").alias("valido_de"),
+            F.min("dia").alias("observado_de"),
             *[F.first(nome).alias(nome) for nome in ("repo",) + ATRIBUTOS_VERSIONADOS],
         )
-        # `valido_ate` e o dia em que a versao seguinte comecou. Fronteira
-        # fechada a esquerda e aberta a direita: nenhum dia pertence a duas
-        # versoes, e nenhum fica sem versao.
-        .withColumn("valido_ate", F.lead("valido_de").over(entre_versoes))
+        # `valido_ate` e o dia em que a versao seguinte foi observada.
+        # Fronteira fechada a esquerda e aberta a direita: nenhum dia
+        # pertence a duas versoes, e nenhum fica sem versao.
+        .withColumn("valido_ate", F.lead("observado_de").over(entre_versoes))
+        # A primeira versao abre para tras; as demais valem do dia em que
+        # foram vistas.
+        .withColumn(
+            "valido_de",
+            F.when(F.col("_versao") == 1, F.lit(INICIO_DOS_TEMPOS))
+            .otherwise(F.col("observado_de")),
+        )
     )
 
     return resumo.select(
         chave_substituta(
-            F.col("repo_id").cast("string"), F.col("valido_de").cast("string")
+            F.col("repo_id").cast("string"), F.col("observado_de").cast("string")
         ).alias("sk_repositorio"),
         F.col("repo_id"),
         F.col("repo"),
         *[F.col(nome) for nome in ATRIBUTOS_VERSIONADOS],
         F.col("valido_de"),
+        F.col("observado_de"),
         F.col("valido_ate"),
         F.col("valido_ate").isNull().alias("flag_atual"),
         F.lit(momento).cast("timestamp").alias("_processado_em"),
@@ -415,3 +433,189 @@ def escrever(spark, df, tabela: str) -> int:
         .saveAsTable(tabela)
     )
     return spark.table(tabela).count()
+
+
+# --------------------------------------------------------------------------
+# fct_commit -- fato de transacao
+# --------------------------------------------------------------------------
+
+TABELA_FCT_COMMIT = fqn(GOLD, "fct_commit")
+
+COLUNAS_FCT_COMMIT = (
+    "sha",
+    "sk_repositorio",
+    "sk_autor",
+    "sk_data_commit",
+    "sk_data_autoria",
+    "comentarios",
+    "qtd_pais",
+    "e_merge",
+    "assinatura_verificada",
+    "dias_ate_o_commit",
+    "_processado_em",
+)
+
+
+def ddl_fct_commit() -> str:
+    """DDL do fato de commits.
+
+    **Grao: um commit.** Evento pontual e imutavel -- so insere, nunca
+    atualiza. E o tipo mais simples dos tres, e serve de referencia para os
+    outros dois.
+    """
+    return f"""
+CREATE TABLE IF NOT EXISTS {TABELA_FCT_COMMIT} (
+    sha                   STRING    NOT NULL COMMENT 'DIMENSAO DEGENERADA: identificador da transacao, sem tabela propria',
+    sk_repositorio        STRING    NOT NULL COMMENT 'versao vigente no dia do commit, nao a versao de hoje',
+    sk_autor              STRING    NOT NULL COMMENT 'autor; membro desconhecido quando nao resolve',
+    sk_data_commit        INT       NOT NULL COMMENT 'PAPEL 1 de dim_tempo: quando entrou no repositorio',
+    sk_data_autoria       INT                COMMENT 'PAPEL 2 de dim_tempo: quando o codigo foi escrito',
+    comentarios           INT                COMMENT 'ADITIVA',
+    qtd_pais              INT                COMMENT 'ADITIVA; mais de um identifica merge',
+    e_merge               BOOLEAN            COMMENT 'ADITIVA como contagem',
+    assinatura_verificada BOOLEAN            COMMENT 'ADITIVA como contagem',
+    dias_ate_o_commit     INT                COMMENT 'NAO ADITIVA: somar nao produz grandeza; use media',
+    _processado_em        TIMESTAMP          COMMENT 'quando o fato foi derivado'
+)
+USING DELTA
+COMMENT 'Fato de transacao. Grao: um commit. Somente insercao.'
+"""
+
+
+def montar_fct_commit(commits, repositorios, autores, momento: datetime):
+    """Liga cada commit as tres dimensoes.
+
+    **A juncao com `dim_repositorio` e por vigencia**, e nao pela versao
+    atual: um commit de junho pertence ao estado que o repositorio tinha em
+    junho. E o motivo de a SCD2 existir -- usar `flag_atual` aqui jogaria
+    fora a historia inteira que a dimensao guarda.
+
+    **`sk_data` e calculada, nao buscada.** A chave de tempo e `aaaammdd`,
+    entao a data ja e a chave: duas juncoes a menos. E o dividendo da chave
+    inteligente decidida no passo 4.2. A integridade referencial passa a ser
+    responsabilidade da bateria, que confere se toda chave existe na
+    dimensao.
+    """
+    from pyspark.sql import functions as F
+
+    chave_autor = F.coalesce(
+        F.col("c.github_id").cast("string"), F.col("c.autor_email")
+    )
+    desconhecido = autores.where(F.col("origem_da_chave") == ORIGEM_DESCONHECIDA)
+    sk_desconhecida = desconhecido.collect()[0]["sk_autor"]
+
+    return (
+        commits.alias("c")
+        .join(
+            repositorios.alias("r"),
+            (F.col("r.repo") == F.col("c.repo"))
+            & (F.col("c.commitado_em") >= F.col("r.valido_de"))
+            & (
+                F.col("r.valido_ate").isNull()
+                | (F.col("c.commitado_em") < F.col("r.valido_ate"))
+            ),
+            "left",
+        )
+        .join(
+            autores.alias("a"),
+            F.col("a.chave_natural") == chave_autor,
+            "left",
+        )
+        .select(
+            F.col("c.sha"),
+            F.col("r.sk_repositorio"),
+            # Commit sem chave natural resolvivel cai no membro desconhecido,
+            # e nao fora do fato: a contagem tem de fechar com a silver.
+            F.coalesce(F.col("a.sk_autor"), F.lit(sk_desconhecida)).alias("sk_autor"),
+            F.date_format("c.commitado_em", "yyyyMMdd").cast("int").alias("sk_data_commit"),
+            F.date_format("c.autorado_em", "yyyyMMdd").cast("int").alias("sk_data_autoria"),
+            F.col("c.comentarios"),
+            F.col("c.qtd_pais"),
+            (F.col("c.qtd_pais") > 1).alias("e_merge"),
+            F.col("c.assinatura_verificada"),
+            F.datediff("c.commitado_em", "c.autorado_em").alias("dias_ate_o_commit"),
+            F.lit(momento).cast("timestamp").alias("_processado_em"),
+        )
+    )
+
+
+# --------------------------------------------------------------------------
+# fct_repo_snapshot -- fato de snapshot periodico
+# --------------------------------------------------------------------------
+
+TABELA_FCT_SNAPSHOT = fqn(GOLD, "fct_repo_snapshot")
+
+MEDIDAS_SNAPSHOT = (
+    "stars",
+    "forks",
+    "issues_abertas",
+    "observadores",
+    "tamanho_kb",
+)
+
+COLUNAS_FCT_SNAPSHOT = (
+    ("repo_id", "sk_repositorio", "sk_data") + MEDIDAS_SNAPSHOT + ("_processado_em",)
+)
+
+
+def ddl_fct_repo_snapshot() -> str:
+    """DDL do fato de snapshot periodico.
+
+    **Grao: um repositorio por dia.** Todas as medidas sao **semi-aditivas**:
+    somar entre repositorios num dia produz o total do ecossistema; somar o
+    mesmo repositorio ao longo de trinta dias conta a mesma estrela trinta
+    vezes. Ao longo do tempo as operacoes validas sao ultimo valor, media, ou
+    a diferenca entre dois dias.
+
+    Nada no SQL impede a soma errada. A defesa e o comentario da coluna.
+    """
+    medidas = "\n".join(
+        f"    {nome:<15} INT                COMMENT 'SEMI-ADITIVA: some entre repositorios, nunca entre dias',"
+        for nome in MEDIDAS_SNAPSHOT
+    )
+    return f"""
+CREATE TABLE IF NOT EXISTS {TABELA_FCT_SNAPSHOT} (
+    repo_id         BIGINT    NOT NULL COMMENT 'DIMENSAO DEGENERADA: torna o grao verificavel sem juncao',
+    sk_repositorio  STRING    NOT NULL COMMENT 'versao vigente no dia da foto',
+    sk_data         INT       NOT NULL COMMENT 'dia da foto',
+{medidas}
+    _processado_em  TIMESTAMP          COMMENT 'quando o fato foi derivado'
+)
+USING DELTA
+COMMENT 'Fato de snapshot periodico. Grao: um repositorio por dia.'
+"""
+
+
+def montar_fct_repo_snapshot(repositorios_silver, dim_repositorio, momento: datetime):
+    """Uma linha por repositorio por dia, com as medidas da foto.
+
+    Sao exatamente as colunas que a `dim_repositorio` recusou: mudam todo dia
+    e, versionadas, gerariam 14 repositorios x 365 dias numa dimensao que
+    deve ter 14 linhas. Aqui a mudanca diaria e o proprio ponto.
+    """
+    from pyspark.sql import functions as F
+
+    dia = F.to_date("s.dt")
+
+    return (
+        repositorios_silver.alias("s")
+        .join(
+            dim_repositorio.alias("d"),
+            (F.col("d.repo_id") == F.col("s.repo_id"))
+            & (dia >= F.col("d.valido_de"))
+            & (F.col("d.valido_ate").isNull() | (dia < F.col("d.valido_ate"))),
+            "left",
+        )
+        .select(
+            F.col("s.repo_id"),
+            F.col("d.sk_repositorio"),
+            F.date_format(dia, "yyyyMMdd").cast("int").alias("sk_data"),
+            *[F.col(f"s.{nome}") for nome in MEDIDAS_SNAPSHOT],
+            F.lit(momento).cast("timestamp").alias("_processado_em"),
+        )
+    )
+
+
+def criar_fatos(spark) -> None:
+    spark.sql(ddl_fct_commit())
+    spark.sql(ddl_fct_repo_snapshot())

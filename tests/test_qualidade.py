@@ -256,3 +256,51 @@ def test_lacuna_no_tempo_bloqueia():
     regra = next(v for v in GOLD if v.nome == "dim_tempo_com_lacuna")
     assert regra.severidade == qualidade.BLOQUEIA
     assert "datediff" in regra.sql
+
+
+# --------------------------------------------------------------------------
+# Bateria dos fatos
+# --------------------------------------------------------------------------
+
+FATOS = qualidade.verificacoes_fatos()
+
+
+def test_bateria_dos_fatos_tem_a_mesma_forma_das_outras():
+    nomes = [v.nome for v in FATOS]
+    assert len(nomes) == len(set(nomes))
+    for v in FATOS:
+        assert v.severidade in qualidade.SEVERIDADES
+        assert "AS violacoes" in v.sql
+        assert len(v.descricao) > 30
+
+
+def test_o_grao_de_cada_fato_e_verificado():
+    nomes = {v.nome for v in FATOS}
+    assert "grao_do_fct_commit" in nomes
+    assert "grao_do_fct_repo_snapshot" in nomes
+
+
+def test_integridade_referencial_cobre_as_tres_dimensoes():
+    # O Unity Catalog registra chave estrangeira mas nao a impoe; estas
+    # verificacoes sao o que substitui a imposicao do banco.
+    nomes = {v.nome for v in FATOS}
+    for dimensao in ("repositorio", "autor", "tempo"):
+        assert f"fato_sem_dimensao_de_{dimensao}" in nomes
+
+
+def test_as_duas_chaves_de_tempo_entram_na_verificacao():
+    regra = next(v for v in FATOS if v.nome == "fato_sem_dimensao_de_tempo")
+    assert "sk_data_commit" in regra.sql
+    assert "sk_data_autoria" in regra.sql
+
+
+def test_juncao_por_vigencia_e_verificada_de_fora():
+    regra = next(v for v in FATOS if v.nome == "commit_ligado_a_versao_futura")
+    assert regra.severidade == qualidade.BLOQUEIA
+    assert "valido_de" in regra.sql and "valido_ate" in regra.sql
+
+
+def test_uso_do_membro_desconhecido_avisa_em_vez_de_bloquear():
+    # Ele existe para ser usado; o que interessa e saber quanto.
+    regra = next(v for v in FATOS if v.nome == "desconhecido_usado_com_chave_resolvivel")
+    assert regra.severidade == qualidade.AVISA

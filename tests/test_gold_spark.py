@@ -287,9 +287,47 @@ def test_serie_sem_mudanca_produz_uma_versao(fotos):
     df = versoes(fotos, [foto(1, "2026-08-21"), foto(1, "2026-08-22"), foto(1, "2026-08-23")])
     assert df.count() == 1
     linha = df.collect()[0]
-    assert linha["valido_de"] == date(2026, 8, 21)
+    assert linha["observado_de"] == date(2026, 8, 21)
     assert linha["valido_ate"] is None
     assert linha["flag_atual"] is True
+
+
+def test_primeira_versao_abre_para_tras(fotos):
+    # O fato comeca antes da primeira foto. Sem isto, a juncao por vigencia
+    # descartaria todo commit anterior ao dia em que passamos a fotografar.
+    linha = versoes(fotos, [foto(1, "2026-08-21")]).collect()[0]
+    assert linha["valido_de"] == gold.INICIO_DOS_TEMPOS
+    assert linha["observado_de"] == date(2026, 8, 21)
+
+
+def test_versao_seguinte_vale_do_dia_em_que_foi_vista(fotos):
+    # So a primeira e suposicao; a mudanca foi observada e tem data real.
+    antiga, nova = versoes(fotos, [
+        foto(1, "2026-08-21", licenca="mit"),
+        foto(1, "2026-08-23", licenca="apache-2.0"),
+    ]).collect()
+
+    assert antiga["valido_de"] == gold.INICIO_DOS_TEMPOS
+    assert nova["valido_de"] == nova["observado_de"] == date(2026, 8, 23)
+
+
+def test_todo_dia_encontra_exatamente_uma_versao(spark, fotos):
+    # A propriedade que a juncao do fato depende: qualquer instante cai em
+    # uma versao, e em apenas uma.
+    versoes(fotos, [
+        foto(1, "2026-08-21", licenca="mit"),
+        foto(1, "2026-08-23", licenca="apache-2.0"),
+    ]).createOrReplaceTempView("_dim")
+
+    for dia in ("2020-01-01", "2026-08-22", "2026-08-23", "2030-01-01"):
+        achadas = spark.sql(
+            f"""
+            SELECT count(*) AS n FROM _dim
+            WHERE DATE'{dia}' >= valido_de
+              AND (valido_ate IS NULL OR DATE'{dia}' < valido_ate)
+            """
+        ).collect()[0]["n"]
+        assert achadas == 1, dia
 
 
 def test_mudanca_de_atributo_abre_versao(fotos):
