@@ -461,3 +461,52 @@ def test_comparacao_e_estrita_e_nao_reprocessa_a_fronteira(lote):
     # gastaria trabalho para reescrever o mesmo valor.
     checkpoint = Checkpoint(repo="b", endpoint="commits@silver", watermark=HOJE)
     assert silver.filtrar_novos(lote([ONTEM, HOJE]), checkpoint).count() == 0
+
+
+# --------------------------------------------------------------------------
+# Os dois caminhos de roteamento tem de concordar
+#
+# A carga roteia por SQL sobre a tabela do lote; `aprovados`/`rejeitados`
+# expressam a mesma regra em DataFrame. Duas escritas da mesma decisao so
+# sao aceitaveis se houver teste provando que nao divergem.
+# --------------------------------------------------------------------------
+
+def registrar_lote(classificado, nome="_lote_teste"):
+    classificado.createOrReplaceTempView(nome)
+    return nome
+
+
+def test_sql_e_dataframe_aprovam_as_mesmas_linhas(spark, classificado):
+    sem_sha = {k: v for k, v in COMMIT.items() if k != "sha"}
+    df = classificado([COMMIT, sem_sha, "{invalido"])
+    origem = registrar_lote(df)
+
+    por_sql = spark.sql(silver.sql_fonte_aprovados(origem)).collect()
+    por_dataframe = silver.aprovados(df).collect()
+
+    assert [l.asDict() for l in por_sql] == [l.asDict() for l in por_dataframe]
+
+
+def test_sql_e_dataframe_rejeitam_as_mesmas_linhas(spark, classificado):
+    sem_sha = {k: v for k, v in COMMIT.items() if k != "sha"}
+    df = classificado([COMMIT, sem_sha, "{invalido"])
+    origem = registrar_lote(df)
+
+    por_sql = spark.sql(silver.sql_fonte_rejeitados(origem)).collect()
+    por_dataframe = silver.rejeitados(df).collect()
+
+    assert [l.asDict() for l in por_sql] == [l.asDict() for l in por_dataframe]
+
+
+def test_fonte_sql_dos_aprovados_nao_carrega_payload(spark, classificado):
+    origem = registrar_lote(classificado(COMMIT))
+    colunas = spark.sql(silver.sql_fonte_aprovados(origem)).columns
+    assert tuple(colunas) == silver.COLUNAS_SILVER
+
+
+def test_fonte_sql_da_quarentena_renomeia_o_motivo(spark, classificado):
+    # A coluna se chama `_motivo` no lote e `motivo` na quarentena.
+    origem = registrar_lote(classificado("{invalido"))
+    colunas = spark.sql(silver.sql_fonte_rejeitados(origem)).columns
+    assert tuple(colunas) == silver.COLUNAS_REJEITADOS
+    assert silver.COLUNA_MOTIVO not in colunas

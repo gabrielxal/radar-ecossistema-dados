@@ -392,34 +392,78 @@ def filtrar_novos(df, checkpoint):
     return df.where(F.col("_ingerido_em") > F.lit(checkpoint.watermark))
 
 
-def _gravar_aprovados(spark, df) -> None:
-    """Upsert por (repo, sha).
+# Lote classificado, materializado antes de ser roteado. Sobrescrito a cada
+# carga: guarda o ultimo lote, o que ajuda a investigar uma rejeicao recente.
+TABELA_LOTE = fqn(SILVER, "lote_commits")
+
+# `_motivo` vira `motivo` na quarentena; o resto das colunas mantem o nome.
+_SELECT_REJEITADOS = ", ".join(
+    f"{COLUNA_MOTIVO} AS motivo" if coluna == "motivo" else coluna
+    for coluna in COLUNAS_REJEITADOS
+)
+
+
+def sql_fonte_aprovados(origem: str) -> str:
+    """As linhas aprovadas, no formato da tabela silver. Espelha `aprovados`."""
+    return (
+        f"SELECT {', '.join(COLUNAS_SILVER)} "
+        f"FROM {origem} WHERE {COLUNA_MOTIVO} IS NULL"
+    )
+
+
+def sql_fonte_rejeitados(origem: str) -> str:
+    """As linhas desviadas, no formato da quarentena. Espelha `rejeitados`."""
+    return (
+        f"SELECT {_SELECT_REJEITADOS} "
+        f"FROM {origem} WHERE {COLUNA_MOTIVO} IS NOT NULL"
+    )
+
+
+def sql_merge_aprovados(origem: str) -> str:
+    """Upsert por (repo, sha), lendo de uma tabela.
 
     Aqui existe `WHEN MATCHED THEN UPDATE`, e a bronze nao tem. A diferenca e
     de natureza: linha de bronze e copia da origem, e corrigi-la destruiria a
     evidencia. Linha de silver e derivada -- se a regra de normalizacao
     melhorar, reprocessar deve substituir o valor antigo pelo novo.
+
+    A origem e uma subconsulta sobre tabela, e nao uma view temporaria sobre
+    DataFrame calculado: o ramo de UPDATE faz o Delta ler a origem duas vezes,
+    e para garantir leituras iguais ele materializaria o plano -- o que exige
+    persist, indisponivel no Serverless.
     """
-    df.createOrReplaceTempView("_silver_aprovados")
-    spark.sql(
-        f"""
+    return f"""
         MERGE INTO {TABELA_COMMITS} AS alvo
-        USING _silver_aprovados AS fonte
+        USING ({sql_fonte_aprovados(origem)}) AS fonte
            ON alvo.repo = fonte.repo AND alvo.sha = fonte.sha
         WHEN MATCHED THEN UPDATE SET *
         WHEN NOT MATCHED THEN INSERT *
-        """
-    )
+    """
 
 
-def _gravar_rejeitados(spark, df) -> None:
-    """Append: rejeicao e evento de uma execucao, nao entidade.
+def sql_inserir_rejeitados(origem: str) -> str:
+    """Insercao simples: rejeicao e evento de uma execucao, nao entidade.
 
     Nao ha MERGE possivel -- `sha` pode ser nulo, que e justamente um dos
     motivos de rejeicao. E manter a tentativa anterior mostra desde quando o
     registro vem falhando.
     """
-    df.write.mode("append").saveAsTable(TABELA_REJEITADOS)
+    return f"INSERT INTO {TABELA_REJEITADOS} {sql_fonte_rejeitados(origem)}"
+
+
+def _preparar_lote(spark, classificado) -> None:
+    """Grava o lote classificado numa tabela, antes de rotear.
+
+    Resolve dois problemas de uma vez. Sem `cache()` -- que o Serverless nao
+    oferece -- cada acao reprocessaria o `from_json` e os casts desde a
+    bronze. E o MERGE precisa de uma origem estavel, que uma tabela e e um
+    DataFrame calculado nao e.
+    """
+    (
+        classificado.write.mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(TABELA_LOTE)
+    )
 
 
 def carregar(spark, endpoint: Endpoint, momento: datetime) -> ResultadoSilver:
@@ -431,13 +475,14 @@ def carregar(spark, endpoint: Endpoint, momento: datetime) -> ResultadoSilver:
 
     anterior = controle.ler(spark, origem, processo)
     novos = filtrar_novos(spark.table(origem), anterior)
-    classificado = classificar(parsear(novos), momento)
+    _preparar_lote(spark, classificar(parsear(novos), momento))
 
-    # Uma agregacao unica em vez de tres contagens separadas. `cache()` seria
-    # o caminho natural para nao reprocessar o `from_json` e os casts a cada
-    # acao, mas persistir DataFrame nao existe no Serverless -- entao o jeito
-    # e pedir menos passagens, nao guardar o resultado.
-    medida = classificado.select(
+    lote = spark.table(TABELA_LOTE)
+
+    # Uma agregacao unica sobre o lote ja materializado: as tres contagens
+    # vem da mesma varredura, entao a invariante nao depende de tres leituras
+    # coincidirem.
+    medida = lote.select(
         F.count(F.lit(1)).alias("lidos"),
         F.count(F.when(F.col(COLUNA_MOTIVO).isNull(), 1)).alias("aprovados"),
         F.count(F.when(F.col(COLUNA_MOTIVO).isNotNull(), 1)).alias("rejeitados"),
@@ -452,9 +497,9 @@ def carregar(spark, endpoint: Endpoint, momento: datetime) -> ResultadoSilver:
     watermark = medida["watermark"] or (anterior.watermark if anterior else None)
 
     if n_ok:
-        _gravar_aprovados(spark, aprovados(classificado))
+        spark.sql(sql_merge_aprovados(TABELA_LOTE))
     if n_ruins:
-        _gravar_rejeitados(spark, rejeitados(classificado))
+        spark.sql(sql_inserir_rejeitados(TABELA_LOTE))
 
     controle.salvar(
         spark,
