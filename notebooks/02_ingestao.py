@@ -154,6 +154,8 @@ for repo in REPOS_ALVO:
         marca = "ERRO "
     elif resultado.pulado:
         marca = "pulado"
+    elif resultado.truncado:
+        marca = "TRUNC"
     else:
         marca = "ok   "
     print(f"[{marca}] {repo:<40} {resultado.registros:>6} registros")
@@ -169,11 +171,13 @@ quota_final = sonda()
 
 pulados = sum(1 for r in resultados if r.pulado)
 com_erro = sum(1 for r in resultados if r.erro)
+truncados = sum(1 for r in resultados if r.truncado)
 total = sum(r.registros for r in resultados)
 
 print(f"repositorios      : {len(resultados)}")
 print(f"  pulados (304)   : {pulados}")
 print(f"  com erro        : {com_erro}")
+print(f"  truncados       : {truncados}")
 print(f"registros gravados: {total:,}")
 # O -1 desconta a sonda final, que tambem consome uma requisicao.
 print(f"quota consumida   : {quota_inicial - quota_final - 1}")
@@ -182,6 +186,17 @@ print(f"quota restante    : {quota_final}")
 for r in resultados:
     if r.erro:
         print(f"\nERRO em {r.repo}: {r.erro}")
+
+# COMMAND ----------
+
+# Truncagem nao interrompe nada, e por isso precisa ser dita: o watermark
+# avanca por cima do que ficou para tras, tornando a falta permanente.
+for r in resultados:
+    if r.truncado:
+        print(
+            f"TRUNCADO {r.repo}: parou no teto de {LIMITE_PAGINAS} paginas; "
+            "ha historico anterior nao coletado"
+        )
 
 # COMMAND ----------
 

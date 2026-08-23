@@ -49,6 +49,9 @@ class ResultadoIngestao:
     maior_data: datetime | None
     pulado: bool          # True quando a sentinela respondeu 304
     erro: str | None = None
+    # True quando o teto de paginas interrompeu a coleta e ficou dado para
+    # tras. Nao e erro: a carga foi bem-sucedida, so nao foi completa.
+    truncado: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -122,6 +125,20 @@ def checkpoint_inicial(
     )
 
 
+def _status(resultado: "ResultadoIngestao") -> str:
+    """Estado da carga na tabela de controle.
+
+    `truncado` fica entre `ok` e `erro`: nada falhou, mas a coleta parou no
+    teto de paginas e ficou historico para tras. Sem esse valor proprio, uma
+    carga incompleta se registra como `ok` e a falta de dado some.
+    """
+    if resultado.erro:
+        return "erro"
+    if resultado.truncado:
+        return "truncado"
+    return "ok"
+
+
 def proximo_checkpoint(
     anterior: Checkpoint | None,
     resultado: "ResultadoIngestao",
@@ -138,7 +155,7 @@ def proximo_checkpoint(
         watermark=watermark,
         etag=resultado.etag,
         ultima_execucao=momento,
-        status="erro" if resultado.erro else "ok",
+        status=_status(resultado),
         mensagem=resultado.erro,
         registros=resultado.registros,
     )
@@ -180,16 +197,19 @@ def coletar(
     repo: str,
     checkpoint: Checkpoint | None,
     limite_paginas: int | None = None,
-) -> list[dict]:
-    """Coleta os registros novos desde o watermark do checkpoint."""
+) -> tuple[list[dict], bool]:
+    """Coleta os registros novos desde o watermark. Devolve (registros, truncado)."""
     params = parametros_de_busca(checkpoint, PER_PAGE)
-    return list(
+    estado: dict = {}
+    registros = list(
         cliente.paginar(
             endpoint.caminho.format(repo=repo),
             params=params,
             limite_paginas=limite_paginas,
+            estado=estado,
         )
     )
+    return registros, estado.get("truncado", False)
 
 
 def ingerir(
@@ -216,7 +236,7 @@ def ingerir(
             pulado=True,
         )
 
-    registros = coletar(cliente, endpoint, repo, checkpoint, limite_paginas)
+    registros, truncado = coletar(cliente, endpoint, repo, checkpoint, limite_paginas)
 
     if not registros:
         return ResultadoIngestao(
@@ -227,6 +247,7 @@ def ingerir(
             etag=novo_etag,
             maior_data=None,
             pulado=False,
+            truncado=truncado,
         )
 
     caminho = caminho_arquivo(base_volume, endpoint.nome, repo, momento)
@@ -240,4 +261,5 @@ def ingerir(
         etag=novo_etag,
         maior_data=maior_data(registros, endpoint.campo_data),
         pulado=False,
+        truncado=truncado,
     )

@@ -28,9 +28,12 @@ def test_nomes_das_verificacoes_sao_unicos():
     assert len(nomes) == len(set(nomes))
 
 
-def test_toda_verificacao_consulta_a_tabela_do_endpoint():
+def test_toda_verificacao_consulta_uma_tabela_da_camada():
+    # `carga_truncada` olha a tabela de controle, e nao a bronze: o sintoma
+    # dela nao esta no dado que chegou, e sim no registro da carga.
+    tabelas = ("workspace.radar_bronze.commits", "controle_ingestao")
     for v in BATERIA:
-        assert "workspace.radar_bronze.commits" in v.sql
+        assert any(t in v.sql for t in tabelas)
 
 
 def test_toda_verificacao_devolve_a_coluna_violacoes():

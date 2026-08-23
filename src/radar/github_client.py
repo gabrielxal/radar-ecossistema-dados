@@ -169,10 +169,19 @@ class GitHubClient:
         caminho: str,
         params: dict | None = None,
         limite_paginas: int | None = None,
+        estado: dict | None = None,
     ) -> Iterator[dict]:
         """Gerador que percorre as paginas seguindo link_next.
 
         Apenas para endpoints que devolvem lista. Para recurso unico, use get().
+
+        `estado`, quando fornecido, recebe `{"truncado": bool}` ao fim do
+        percurso. `True` significa que o teto de paginas interrompeu um
+        percurso que ainda tinha proxima pagina -- ou seja, ficou dado para
+        tras. Sem esse canal, quem consome com `list()` nao teria como saber
+        por que o gerador parou, e a coleta parcial passaria por completa.
+
+        So e preenchido se o gerador for percorrido ate o fim.
         """
         parametros = dict(params or {})
         parametros.setdefault("per_page", PER_PAGE)
@@ -191,6 +200,13 @@ class GitHubClient:
 
             pagina += 1
             if limite_paginas is not None and pagina >= limite_paginas:
-                break
+                # Havia proxima pagina? Se nao, o teto coincidiu com o fim e
+                # nada se perdeu.
+                if estado is not None:
+                    estado["truncado"] = bool(resposta.link_next)
+                return
 
             url = resposta.link_next
+
+        if estado is not None:
+            estado["truncado"] = False

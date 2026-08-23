@@ -6,17 +6,20 @@ from datetime import datetime, timezone
 from radar.controle import Checkpoint
 from radar.ingestao import (
     ENDPOINTS,
+    ResultadoIngestao,
     Endpoint,
     caminho_arquivo,
     gravar_jsonl,
     ingerir,
     maior_data,
     para_datetime,
+    proximo_checkpoint,
     sanitizar_repo,
     valor_aninhado,
 )
 
 COMMITS = ENDPOINTS["commits"]
+MOMENTO = datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def commit(sha: str, data: str) -> dict:
@@ -27,10 +30,12 @@ def commit(sha: str, data: str) -> dict:
 class ClienteFalso:
     """Duble do GitHubClient: devolve o que foi programado e registra chamadas."""
 
-    def __init__(self, sentinela_status=200, etag='W/"novo"', paginas=None):
+    def __init__(self, sentinela_status=200, etag='W/"novo"', paginas=None,
+                 truncado=False):
         self.sentinela_status = sentinela_status
         self.etag = etag
         self.paginas = paginas or []
+        self.truncado = truncado
         self.chamadas_get = []
         self.chamadas_paginar = []
 
@@ -47,9 +52,11 @@ class ClienteFalso:
             rate_reset=0,
         )
 
-    def paginar(self, caminho, params=None, limite_paginas=None):
+    def paginar(self, caminho, params=None, limite_paginas=None, estado=None):
         self.chamadas_paginar.append({"caminho": caminho, "params": params})
         yield from self.paginas
+        if estado is not None:
+            estado["truncado"] = self.truncado
 
 
 # --------------------------------------------------------------------------
@@ -256,3 +263,62 @@ def test_proximo_checkpoint_preserva_watermark_quando_nada_muda(tmp_path):
 
     assert ck.watermark == anterior.watermark  # nao volta para None
     assert ck.registros == 0
+
+
+# --------------------------------------------------------------------------
+# Truncagem: coleta parcial nao pode passar por completa
+# --------------------------------------------------------------------------
+
+def test_coleta_completa_nao_marca_truncagem(tmp_path):
+    cliente = ClienteFalso(paginas=[{"sha": "a"}])
+    resultado = ingerir(
+        cliente=cliente,
+        endpoint=COMMITS,
+        repo="duckdb/duckdb",
+        checkpoint=None,
+        base_volume=str(tmp_path),
+        momento=MOMENTO,
+    )
+    assert resultado.truncado is False
+
+
+def test_teto_de_paginas_marca_truncagem(tmp_path):
+    cliente = ClienteFalso(paginas=[{"sha": "a"}], truncado=True)
+    resultado = ingerir(
+        cliente=cliente,
+        endpoint=COMMITS,
+        repo="duckdb/duckdb",
+        checkpoint=None,
+        base_volume=str(tmp_path),
+        momento=MOMENTO,
+        limite_paginas=1,
+    )
+    assert resultado.truncado is True
+
+
+def test_truncagem_vira_status_proprio_no_checkpoint():
+    # Nem `ok` nem `erro`: a carga funcionou, mas nao foi completa.
+    truncada = ResultadoIngestao(
+        repo="x", endpoint="commits", registros=500, arquivo="a.jsonl",
+        etag=None, maior_data=MOMENTO, pulado=False, truncado=True,
+    )
+    checkpoint = proximo_checkpoint(None, truncada, MOMENTO)
+    assert checkpoint.status == "truncado"
+
+
+def test_erro_tem_precedencia_sobre_truncagem():
+    # Se a carga falhou, o diagnostico util e o erro, nao a truncagem.
+    com_erro = ResultadoIngestao(
+        repo="x", endpoint="commits", registros=0, arquivo=None,
+        etag=None, maior_data=None, pulado=False, truncado=True,
+        erro="HTTPError: 502",
+    )
+    assert proximo_checkpoint(None, com_erro, MOMENTO).status == "erro"
+
+
+def test_carga_normal_continua_ok():
+    normal = ResultadoIngestao(
+        repo="x", endpoint="commits", registros=10, arquivo="a.jsonl",
+        etag=None, maior_data=MOMENTO, pulado=False,
+    )
+    assert proximo_checkpoint(None, normal, MOMENTO).status == "ok"

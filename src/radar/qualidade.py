@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from radar import bronze, silver
+from radar import bronze, controle, silver
 from radar.config import BRONZE, REPOS, fqn
 from radar.ingestao import Endpoint
 
@@ -186,6 +186,20 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
                 SELECT count(*) AS violacoes
                 FROM {tabela}
                 WHERE repo NOT IN ({_lista_sql(REPOS)})
+            """,
+        ),
+        Verificacao(
+            nome="carga_truncada",
+            descricao=(
+                "Nenhuma carga parou no teto de paginas. Truncagem nao "
+                "corrompe o que chegou, mas deixa historico para tras -- e o "
+                "watermark avanca por cima, tornando a falta permanente."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {controle.TABELA_CONTROLE}
+                WHERE endpoint = '{endpoint.nome}' AND status = 'truncado'
             """,
         ),
         Verificacao(

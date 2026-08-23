@@ -386,6 +386,46 @@ Onde a memória do pipeline mora. Criada na Etapa 2 como
 É ela que transforma um script que roda uma vez num processo que roda todo dia sem refazer
 trabalho.
 
+### 5.7 Limitação conhecida: o teto de páginas apaga histórico em silêncio
+
+Descoberta com dado real, na verificação da Etapa 3. Não é hipótese: cinco dos catorze
+repositórios estão incompletos neste momento.
+
+O `limite_paginas` existe como válvula de segurança contra estourar a quota. Sozinho, seria
+uma escolha consciente. O problema é a interação com o watermark:
+
+1. A API do GitHub devolve commits **do mais novo para o mais antigo**
+2. Com `limite_paginas=5`, coletamos os **500 mais recentes** dentro da janela pedida
+3. `proximo_checkpoint` grava `watermark = data_do_commit_mais_novo - sobreposição`
+4. A execução seguinte parte dali — e **o que ficou para trás nunca mais é buscado**
+
+Medido em 2026-08-22, com janela de 90 dias (desde 24/05):
+
+| Repositório | Commit mais antigo coletado | Buraco |
+|---|---|---|
+| `trinodb/trino` | 2026-07-24 | 2 meses |
+| `apache/spark` | 2026-07-27 | 2 meses |
+| `apache/airflow` | 2026-07-31 | 2 meses |
+| `datahub-project/datahub` | 2026-07-16 | ~2 meses |
+| `dbt-labs/dbt-core` | 2026-07-03 | ~6 semanas |
+
+Os outros nove alcançaram o início da janela e estão completos.
+
+**O que torna isso grave não é a falta de dado — é o silêncio.** O pipeline segue com
+`status='ok'`, sem erro e sem aviso. E nenhuma bateria de qualidade pega: todas verificam o
+dado que chegou; **nenhuma pergunta o que deveria ter chegado e não chegou.**
+
+É a seção 3.3 deste documento — *a API mente em silêncio* — com o papel invertido: aqui quem
+omite é o nosso próprio código.
+
+Correção planejada, em ordem de prioridade:
+
+| # | Mudança | Por quê |
+|---|---|---|
+| 1 | `paginar()` informa que parou pelo teto; controle grava `status='truncado'` | Transforma perda silenciosa em perda visível. É o mínimo |
+| 2 | Não avançar o watermark quando houve truncagem | Impede que o buraco se torne permanente |
+| 3 | Backfill em janelas, com o parâmetro `until` da API | Recupera o que já ficou para trás |
+
 ---
 
 ## 6. Modelagem dimensional
@@ -645,6 +685,9 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | 11 | `SyntaxError: invalid syntax` na primeira célula de um notebook | `%load_ext autoreload` é magic do **IPython**, não do Databricks; o que a plataforma não reconhece como magic vai direto para o parser do Python | **Prática de Jupyter não é automaticamente portátil para o Databricks.** A plataforma tem as ferramentas dela — `restartPython()` no lugar do `autoreload` |
 | 12 | `UnsatisfiedLinkError: NativeIO$Windows.access0` ao ler arquivo local pelo Spark | Leitura de arquivo no Windows passa pela camada nativa do Hadoop, que exige `winutils.exe` e `hadoop.dll` | **Limitação de ambiente também é sinal de projeto.** Antes de instalar o binário de terceiros, a saída foi separar I/O de transformação (`ler_landing` / `projetar`) — desenho melhor de qualquer forma, e que tornou a regra de negócio testável sem tocar o disco |
 | 13 | Teste escrito com a resposta "óbvia" falhou: `from_json` sobre JSON inválido | Em modo permissivo ele não devolve `NULL` na coluna, e sim um struct com **todos os campos** nulos | **A detecção de registro inválido não pode ser `coluna IS NULL`.** O desenho da quarentena da Etapa 3 mudou por causa disso — antes de existir. Sem sessão Spark local, o erro só apareceria com o pipeline já rodando |
+| 14 | `NOT_SUPPORTED_WITH_SERVERLESS: PERSIST TABLE` na carga da silver | `df.cache()` não existe em compute gerenciado | **A saída não é procurar um substituto para persistir, é reduzir passagens** — ou materializar em tabela, que é armazenamento que a plataforma oferece. Terceiro caso da mesma família (`spark.conf` fechada, magic do IPython recusada, agora `cache`): *máquina que você não controla é máquina cujo motor você não configura* |
+| 15 | Depois de corrigido e enviado, o **mesmo** erro por três rodadas | O `git pull` chegou, o `restartPython()` não. E o diagnóstico usado para descartar essa hipótese estava errado: `inspect.getsource(modulo)` lê o **arquivo em disco**, não o objeto carregado | **Escolha a ferramenta que observa o que você quer saber.** Para saber o que está em execução, pergunte à memória: `hasattr(modulo, "SIMBOLO_NOVO")`. A pergunta feita ao alvo errado devolve uma resposta verdadeira e inútil, e custou três tentativas de correção às cegas |
+| 16 | `[FALHA] 3. merge dos aprovados: AttributeError` — lido como defeito no `MERGE` | Uma célula de diagnóstico temporária, escrita duas versões antes, chamava função que a refatoração removeu. O `MERGE` nunca chegou a executar | **`try/except` com rótulo próprio descreve a sua intenção, não o que falhou.** O rótulo `"merge dos aprovados"` apareceu colado a um erro ocorrido antes do merge. Andaime de diagnóstico tem prazo de validade — apague quando o diagnóstico terminar |
 
 ---
 
@@ -657,8 +700,8 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | **0** | Ambiente, estrutura do repositório, gestão de segredo | Git, isolamento de ambiente, segurança | ✅ concluída |
 | **1** | `GitHubClient` — cliente da API | Paginação, retry/backoff, rate limit, ETag, testes com dublê | ✅ concluída |
 | **2** | Tabela de controle + landing zone + camada bronze | Checkpoint, JSON cru particionado, idempotência, proveniência | ✅ concluída |
-| **3** | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ⏳ em andamento |
-| **4** | Gold — dimensões | Star schema, SCD2, chaves substitutas | ☐ |
+| **3** | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ✅ concluída |
+| **4** | Gold — dimensões | Star schema, SCD2, chaves substitutas | ⏳ próxima |
 | **5** | Gold — os três fatos | Transação, snapshot periódico, snapshot acumulado | ☐ |
 | **6** | CI, orquestração, README | GitHub Actions, Databricks Workflows, documentação | ☐ |
 
@@ -684,6 +727,45 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | 2.5 | `bronze.py` — JSONL cru → Delta, `MERGE` idempotente por chave natural |
 | 2.6 | `qualidade.py` — bateria de verificações e contagem de controle, com histórico |
 
+### 10.4 Detalhe da Etapa 3 (concluída)
+
+| Sub-passo | Entrega |
+|---|---|
+| 3.1 | Schema do commit declarado em DDL — data permanece `STRING` |
+| 3.2 | Tipagem e normalização coluna a coluna, com `try_to_timestamp` |
+| 3.3 | Quarentena com motivo; invariante `bronze = silver + quarentena` |
+| 3.4 | Carga incremental por watermark próprio, com **upsert** |
+| 3.5 | Notebook `05_silver` |
+| 3.6 | Bateria da silver — regras sobre o significado do dado |
+
+**A decisão que define a camada.** O schema declara o JSON **como ele chega**: data ISO é
+`STRING`, porque em JSON é string. A conversão para `TIMESTAMP` acontece depois, explícita,
+onde o fracasso é detectável. Declarar `TIMESTAMP` no `from_json` faria uma data inválida
+virar `NULL` silenciosamente dentro da leitura — exatamente o que a seção 4.4 proíbe.
+
+E `try_to_timestamp` em vez de `to_timestamp`: com ANSI ligado, o cast comum lança exceção e
+um único registro torto derruba a carga inteira.
+
+**O `MERGE` da silver tem `WHEN MATCHED THEN UPDATE`, e o da bronze não.** A diferença é de
+natureza: linha de bronze é cópia da origem, e corrigi-la destruiria a evidência; linha de
+silver é derivação, e uma regra de normalização melhor deve substituir o valor antigo.
+
+**Verificação com dado real** — 5.646 commits, 14 repositórios, 2026-08-23:
+
+| Medida | Valor |
+|---|---|
+| bronze = silver + quarentena | 5.646 = 5.646 + 0 ✅ |
+| Verificações da bateria | 11 de 11 aprovadas, 0 violações |
+| Commits sem conta do GitHub (`author` nulo) | **80** — 21% do `dagster-io/dagster` |
+| Commits de bot | **594** (10,5%) |
+| Assinatura verificada | 4.191 (74%) contra 1.455 sem assinatura |
+
+Os dois primeiros números justificam decisões de projeto que, sem dado real, seriam apenas
+argumento: `author` nulável não era zelo excessivo, e `bot` no domínio de `github_tipo` era
+carga útil — sem ele, 594 linhas teriam disparado aviso.
+
+**Testes:** 229 no total — 169 puros (0,3s) e 60 com sessão Spark local.
+
 **Idempotência, medida no transaction log.** Sete versões da tabela bronze, em três
 sessões e quatro clusters diferentes: a primeira inseriu 200 linhas, as seis seguintes
 inseriram zero — todas lendo as mesmas 200 linhas de origem. Nessas seis,
@@ -691,7 +773,7 @@ inseriram zero — todas lendo as mesmas 200 linhas de origem. Nessas seis,
 correspondência não reescreve arquivo. E `matchedPredicates` vazio em todas registra,
 no próprio log, que esta tabela não tem caminho de `UPDATE`.
 
-### 10.4 Fluxo de trabalho
+### 10.5 Fluxo de trabalho
 
 ```powershell
 # 1. ativar o ambiente
@@ -735,7 +817,7 @@ qualquer máquina.
 > Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
 > do motor.
 
-### 10.5 Convenção de mensagens de commit
+### 10.6 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -748,7 +830,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.6 Regras de manutenção deste documento
+### 10.7 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8 — registre
@@ -757,10 +839,12 @@ Conventional Commits:
 4. Se uma decisão for revertida, **não apague** — registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.7 Melhorias planejadas
+### 10.8 Melhorias planejadas
 
 Viram commits de evolução, e essa evolução fica visível no histórico:
 
+- **Tornar a truncagem por `limite_paginas` visível** e recuperar o histórico perdido
+  (seção 5.7) — é a única pendência que afeta a completude do dado
 - Migrar a leitura do token para Databricks Secret Scope
 - GitHub Actions rodando `pytest` a cada push e PR
 - Concorrência controlada na ingestão (vários repositórios em paralelo, respeitando quota)
