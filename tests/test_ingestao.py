@@ -361,3 +361,31 @@ def test_truncagem_na_primeira_execucao_nao_inventa_watermark():
         pulado=False, truncado=True,
     )
     assert proximo_checkpoint(None, truncada, MOMENTO).watermark is None
+
+
+def test_checkpoint_truncado_ignora_o_etag(tmp_path):
+    # A sentinela olha so o topo da lista. Um 304 pularia o repositorio que
+    # justamente tem historico por coletar, e a recuperacao nunca aconteceria.
+    cliente = ClienteFalso(paginas=[{"sha": "a"}])
+    truncado = Checkpoint(
+        repo="x", endpoint="commits", etag='W/"antigo"', status="truncado",
+        watermark=datetime(2026, 5, 25, tzinfo=timezone.utc),
+    )
+    ingerir(
+        cliente=cliente, endpoint=COMMITS, repo="x", checkpoint=truncado,
+        base_volume=str(tmp_path), momento=MOMENTO,
+    )
+    assert cliente.chamadas_get[0]["etag"] is None
+
+
+def test_checkpoint_normal_usa_o_etag(tmp_path):
+    cliente = ClienteFalso(paginas=[{"sha": "a"}])
+    normal = Checkpoint(
+        repo="x", endpoint="commits", etag='W/"antigo"', status="ok",
+        watermark=datetime(2026, 5, 25, tzinfo=timezone.utc),
+    )
+    ingerir(
+        cliente=cliente, endpoint=COMMITS, repo="x", checkpoint=normal,
+        base_volume=str(tmp_path), momento=MOMENTO,
+    )
+    assert cliente.chamadas_get[0]["etag"] == 'W/"antigo"'

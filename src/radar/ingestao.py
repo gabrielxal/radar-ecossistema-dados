@@ -234,7 +234,13 @@ def ingerir(
     limite_paginas: int | None = None,
 ) -> ResultadoIngestao:
     """Sentinela, coleta e gravacao de um par (repo, endpoint)."""
-    etag_anterior = checkpoint.etag if checkpoint else None
+    # Checkpoint truncado significa historico por coletar. A sentinela olha
+    # apenas o topo da lista: se nada mudou la, ela responde 304 e o
+    # repositorio seria pulado -- justamente aquele que se sabe incompleto.
+    # Ignorar o ETag nesse caso e o que permite a coleta continuar.
+    truncado_antes = bool(checkpoint and checkpoint.status == "truncado")
+    etag_anterior = None if truncado_antes else (checkpoint.etag if checkpoint else None)
+
     mudou, novo_etag = sentinela(cliente, endpoint, repo, etag_anterior)
 
     if not mudou:

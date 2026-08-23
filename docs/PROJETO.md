@@ -426,6 +426,12 @@ Correção planejada, em ordem de prioridade:
 | 2 | Não avançar o watermark quando houve truncagem | ✅ feito |
 | 3 | Backfill em janelas, com o parâmetro `until` da API | ☐ |
 
+**A interação com o ETag.** Um checkpoint truncado faz a ingestão **ignorar o ETag
+guardado**. A sentinela olha apenas o topo da lista: se nada mudou lá, ela responde
+`304` e o repositório é pulado — justamente aquele que se sabe incompleto. Sem essa
+exceção, a recuperação nunca aconteceria, e o repositório ficaria travado como
+`truncado` para sempre, sendo pulado a cada execução.
+
 **Por que o item 2 não avança em vez de recuar.** A API entrega commits do mais
 novo para o mais antigo, e `since` só aceita limite inferior — não existe forma de
 voltar no tempo dentro do mesmo mecanismo. Preservar o watermark faz a execução
