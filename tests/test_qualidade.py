@@ -213,3 +213,46 @@ def test_dominio_fora_da_lista_avisa_em_vez_de_bloquear():
 def test_as_duas_reconciliacoes_tem_nomes_distintos():
     # Dividem a tabela de historico; nome igual misturaria as series.
     assert qualidade.RECONCILIACAO_BRONZE != qualidade.RECONCILIACAO_SILVER
+
+
+# --------------------------------------------------------------------------
+# Bateria da gold
+# --------------------------------------------------------------------------
+
+GOLD = qualidade.verificacoes_gold()
+
+
+def test_bateria_da_gold_tem_a_mesma_forma_das_outras():
+    nomes = [v.nome for v in GOLD]
+    assert len(nomes) == len(set(nomes))
+    for v in GOLD:
+        assert v.severidade in qualidade.SEVERIDADES
+        assert "AS violacoes" in v.sql
+        assert len(v.descricao) > 30
+
+
+def test_as_tres_invariantes_da_scd2_estao_cobertas():
+    nomes = {v.nome for v in GOLD}
+    assert "mais_de_uma_versao_vigente" in nomes
+    assert "flag_atual_incoerente" in nomes
+    assert "chave_substituta_duplicada" in nomes
+
+
+def test_invariantes_da_scd2_bloqueiam():
+    # Duas versoes vigentes fariam a juncao do fato duplicar a linha.
+    for nome in ("mais_de_uma_versao_vigente", "flag_atual_incoerente",
+                 "chave_substituta_duplicada"):
+        assert next(v for v in GOLD if v.nome == nome).severidade == qualidade.BLOQUEIA
+
+
+def test_premissa_da_chave_hibrida_virou_verificacao():
+    # A medicao que fundamentou a decisao vira vigilancia permanente.
+    regra = next(v for v in GOLD if v.nome == "email_em_duas_formas")
+    assert regra.severidade == qualidade.BLOQUEIA
+    assert "silver.commits" in regra.sql
+
+
+def test_lacuna_no_tempo_bloqueia():
+    regra = next(v for v in GOLD if v.nome == "dim_tempo_com_lacuna")
+    assert regra.severidade == qualidade.BLOQUEIA
+    assert "datediff" in regra.sql

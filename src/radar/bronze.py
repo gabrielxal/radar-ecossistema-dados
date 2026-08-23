@@ -146,12 +146,15 @@ def deduplicar(df, endpoint: Endpoint):
     A duplicata e esperada: DIAS_SOBREPOSICAO faz cada carga reler um dia ja
     lido. Como o MERGE recusa fonte com chave repetida ("multiple source
     rows matched"), a deduplicacao precede a gravacao.
+
+    A chave vem do endpoint: numa lista e o registro; num snapshot e o par
+    repositorio + dia, o que reduz varias coletas do mesmo dia a uma foto.
     """
     from pyspark.sql import Window
     from pyspark.sql import functions as F
 
     janela = (
-        Window.partitionBy("repo", endpoint.chave)
+        Window.partitionBy(*endpoint.chaves)
         .orderBy(F.col("_arquivo_origem").asc())  # ordem determinista
     )
     return (
@@ -173,12 +176,12 @@ def carregar(
     deduplicar(lidas, endpoint).createOrReplaceTempView("_bronze_fonte")
 
     antes = spark.table(tabela).count()
+    juncao = " AND ".join(f"alvo.{c} = fonte.{c}" for c in endpoint.chaves)
     spark.sql(
         f"""
         MERGE INTO {tabela} AS alvo
         USING _bronze_fonte AS fonte
-           ON alvo.repo = fonte.repo
-          AND alvo.{endpoint.chave} = fonte.{endpoint.chave}
+           ON {juncao}
         WHEN NOT MATCHED THEN INSERT *
         """
     )

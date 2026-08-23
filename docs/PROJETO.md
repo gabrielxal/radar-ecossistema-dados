@@ -535,6 +535,48 @@ Formato adotado:
 2. `flag_atual` e `valido_ate` contam a mesma história
 3. A chave substituta é única
 
+#### A dimensão é derivada, não mantida
+
+Decisão da Etapa 4, com alternativa rejeitada.
+
+O caminho clássico da SCD2 é **incremental**: a cada carga, comparar o estado de hoje
+com a versão vigente e, quando algo mudou, fechar a linha anterior (`valido_ate`,
+`flag_atual = false`) e abrir uma nova. É o que a maioria dos tutoriais ensina, e é o
+que um `MERGE` do Delta faz bem.
+
+O problema é que isso **guarda estado** — e estado errado não se corrige sozinho. Uma
+execução perdida, uma carga que rodou duas vezes, um erro no meio do `MERGE`: qualquer
+um deixa a tabela permanentemente torta, e não há como saber olhando para ela.
+
+Aqui a silver guarda **todas as fotos diárias** do repositório. Isso muda o problema:
+o histórico inteiro pode ser recalculado do zero a cada execução.
+
+```
+foto do dia  →  hash dos atributos versionados
+             →  compara com a foto anterior (lag de um dia)
+             →  soma acumulada das mudanças = número da versão
+             →  valido_de = primeiro dia do grupo
+                valido_ate = valido_de da versão seguinte
+```
+
+| | Incremental | **Derivada** |
+|---|---|---|
+| Estado | mantido entre execuções | nenhum |
+| Execução perdida | tabela torta para sempre | a próxima conserta |
+| Reprocessar | não é possível sem apagar | é o funcionamento normal |
+| Custo | proporcional à mudança | proporcional ao histórico |
+
+O custo é reprocessar tudo. Com 14 repositórios e uma foto por dia são ~5 mil linhas
+por ano — irrelevante, e continua sendo por muitos anos. A troca deixa de valer quando
+o histórico ficar grande o bastante para o recálculo pesar; nesse ponto o caminho é
+materializar as versões antigas e derivar só a janela recente.
+
+**Isso só é seguro por causa da chave determinística.** Reconstruir a dimensão gera
+exatamente as mesmas chaves substitutas, então os fatos que apontam para elas continuam
+válidos. Com contador incremental (`row_number`), cada reconstrução quebraria o modelo
+inteiro — em silêncio. As duas decisões, hash e recálculo, se sustentam mutuamente:
+nenhuma das duas funcionaria sozinha.
+
 ### 6.5 Chaves substitutas determinísticas
 
 A chave substituta é um **hash** da chave natural somada à data de início da versão — nunca

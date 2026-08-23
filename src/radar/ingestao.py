@@ -19,12 +19,23 @@ from radar.controle import Checkpoint, calcular_watermark, parametros_de_busca
 
 @dataclass(frozen=True)
 class Endpoint:
-    """Metadados de um endpoint de lista da API."""
+    """Metadados de um endpoint da API.
+
+    Dois formatos convivem aqui. **Lista** e paginada e incremental: commits
+    chegam aos milhares e so os novos interessam. **Snapshot** e recurso
+    unico e sem historico: `/repos/{repo}` devolve o estado de agora, e o
+    historico se constroi coletando todo dia.
+    """
 
     nome: str
     caminho: str        # com {repo} a substituir
     campo_data: str     # caminho aninhado ate a data do registro
-    chave: str          # chave natural do registro
+    chave: str          # chave natural do registro, extraida do payload
+    # O que identifica uma linha na bronze. Numa lista e a chave natural do
+    # registro; num snapshot e o par repositorio + dia, porque o mesmo
+    # repositorio coletado em dois dias sao duas fotos, nao uma repetida.
+    chaves: tuple[str, ...]
+    snapshot: bool = False
 
 
 ENDPOINTS: dict[str, Endpoint] = {
@@ -33,6 +44,15 @@ ENDPOINTS: dict[str, Endpoint] = {
         caminho="/repos/{repo}/commits",
         campo_data="commit.committer.date",
         chave="sha",
+        chaves=("repo", "sha"),
+    ),
+    "repositorios": Endpoint(
+        nome="repositorios",
+        caminho="/repos/{repo}",
+        campo_data="pushed_at",
+        chave="id",
+        chaves=("repo", "dt"),
+        snapshot=True,
     ),
 }
 
@@ -222,6 +242,51 @@ def coletar(
         )
     )
     return registros, estado.get("truncado", False)
+
+
+def ingerir_snapshot(
+    cliente,
+    endpoint: Endpoint,
+    repo: str,
+    base_volume: str,
+    momento: datetime,
+) -> ResultadoIngestao:
+    """Coleta a foto atual de um recurso unico.
+
+    Sem paginacao e sem watermark: nao ha historico a percorrer, o recurso
+    devolve o estado de agora.
+
+    Sem sentinela tambem, e isso e deliberado. Um `304` economizaria uma
+    requisicao e deixaria **um buraco na serie temporal** -- o dia sem foto
+    nao e o dia sem mudanca, e quem consulta nao consegue distinguir os
+    dois. Catorze requisicoes por dia e preco baixo por uma serie continua.
+    """
+    resposta = cliente.get(endpoint.caminho.format(repo=repo))
+    registros = [resposta.dados] if resposta.dados else []
+
+    if not registros:
+        return ResultadoIngestao(
+            repo=repo,
+            endpoint=endpoint.nome,
+            registros=0,
+            arquivo=None,
+            etag=resposta.etag,
+            maior_data=None,
+            pulado=False,
+        )
+
+    caminho = caminho_arquivo(base_volume, endpoint.nome, repo, momento)
+    gravar_jsonl(caminho, registros)
+
+    return ResultadoIngestao(
+        repo=repo,
+        endpoint=endpoint.nome,
+        registros=1,
+        arquivo=caminho,
+        etag=resposta.etag,
+        maior_data=maior_data(registros, endpoint.campo_data),
+        pulado=False,
+    )
 
 
 def ingerir(

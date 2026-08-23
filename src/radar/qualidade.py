@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from radar import bronze, controle, silver
+from radar import bronze, controle, gold, silver
 from radar.config import BRONZE, REPOS, fqn
 from radar.ingestao import Endpoint
 
@@ -357,6 +357,141 @@ def verificacoes_silver(endpoint: Endpoint) -> tuple[Verificacao, ...]:
                 SELECT count(*) AS violacoes
                 FROM {tabela}
                 WHERE repo NOT IN ({_lista_sql(REPOS)})
+            """,
+        ),
+    )
+
+
+def verificacoes_gold() -> tuple[Verificacao, ...]:
+    """A bateria da gold. Aqui as regras sao sobre o modelo, nao sobre o dado.
+
+    As tres primeiras sao as invariantes da SCD2 declaradas na secao 6.4 do
+    documento de projeto -- afirmacoes que a modelagem faz e que so um teste
+    de fora comprova.
+    """
+    tempo = gold.TABELA_TEMPO
+    autor = gold.TABELA_AUTOR
+    repositorio = gold.TABELA_REPOSITORIO
+
+    return (
+        Verificacao(
+            nome="mais_de_uma_versao_vigente",
+            descricao=(
+                "Exatamente uma versao vigente por chave natural. Duas "
+                "fariam a juncao do fato duplicar a linha, inflando medida."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT repo_id FROM {repositorio}
+                    WHERE flag_atual GROUP BY repo_id HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="flag_atual_incoerente",
+            descricao=(
+                "`flag_atual` e `valido_ate` contam a mesma historia: "
+                "vigente e exatamente a versao sem data de fim."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {repositorio}
+                WHERE (flag_atual AND valido_ate IS NOT NULL)
+                   OR (NOT flag_atual AND valido_ate IS NULL)
+            """,
+        ),
+        Verificacao(
+            nome="chave_substituta_duplicada",
+            descricao=(
+                "A chave substituta identifica uma versao. Repetida, o fato "
+                "passa a apontar para duas linhas ao mesmo tempo."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT sk_repositorio FROM {repositorio}
+                    GROUP BY sk_repositorio HAVING count(*) > 1
+                    UNION ALL
+                    SELECT sk_autor FROM {autor}
+                    GROUP BY sk_autor HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="intervalo_de_validade_invertido",
+            descricao=(
+                "Uma versao nao pode terminar antes de comecar. Fronteira "
+                "fechada a esquerda e aberta a direita."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {repositorio}
+                WHERE valido_ate IS NOT NULL AND valido_ate <= valido_de
+            """,
+        ),
+        Verificacao(
+            nome="email_em_duas_formas",
+            descricao=(
+                "Nenhum e-mail aparece com conta resolvida em um commit e "
+                "sem conta noutro. E a premissa da chave hibrida da "
+                "dim_autor: se deixar de valer, a mesma pessoa vira duas "
+                "linhas com chaves substitutas diferentes."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT autor_email
+                    FROM {silver.TABELA_COMMITS}
+                    WHERE autor_email IS NOT NULL
+                    GROUP BY autor_email
+                    HAVING count(DISTINCT CASE WHEN github_id IS NULL THEN 1 END) > 0
+                       AND count(DISTINCT CASE WHEN github_id IS NOT NULL THEN 1 END) > 0
+                )
+            """,
+        ),
+        Verificacao(
+            nome="dim_tempo_com_lacuna",
+            descricao=(
+                "Um dia por linha, sem buraco entre o primeiro e o ultimo. "
+                "Lacuna faz a serie temporal pular o dia parado."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT datediff(max(data), min(data)) + 1 - count(*) AS violacoes
+                    FROM {tempo}
+                ) WHERE violacoes <> 0
+            """,
+        ),
+        Verificacao(
+            nome="autor_sem_origem_declarada",
+            descricao=(
+                "Toda linha declara de onde veio a chave. Sem isso a decisao "
+                "da chave hibrida deixa de ser auditavel pelo dado."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {autor}
+                WHERE origem_da_chave NOT IN (
+                    '{gold.ORIGEM_CONTA}', '{gold.ORIGEM_EMAIL}', '{gold.ORIGEM_DESCONHECIDA}'
+                )
+            """,
+        ),
+        Verificacao(
+            nome="repositorio_fora_do_escopo",
+            descricao=(
+                "Toda versao pertence a um repositorio da lista do config, "
+                "como nas camadas anteriores."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes
+                FROM {repositorio}
+                WHERE flag_atual AND repo NOT IN ({_lista_sql(REPOS)})
             """,
         ),
     )
