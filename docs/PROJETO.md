@@ -785,8 +785,8 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | **1** | `GitHubClient` — cliente da API | Paginação, retry/backoff, rate limit, ETag, testes com dublê | ✅ concluída |
 | **2** | Tabela de controle + landing zone + camada bronze | Checkpoint, JSON cru particionado, idempotência, proveniência | ✅ concluída |
 | **3** | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ✅ concluída |
-| **4** | Gold — dimensões | Star schema, SCD2, chaves substitutas | ⏳ próxima |
-| **5** | Gold — os três fatos | Transação, snapshot periódico, snapshot acumulado | ☐ |
+| **4** | Gold — dimensões | Star schema, SCD2, chaves substitutas | ✅ concluída |
+| **5** | Gold — os três fatos | Transação, snapshot periódico, snapshot acumulado | ⏳ próxima |
 | **6** | CI, orquestração, README | GitHub Actions, Databricks Workflows, documentação | ☐ |
 
 ### 10.2 Detalhe da Etapa 1 (concluída)
@@ -874,6 +874,75 @@ errado à pergunta *"quanto do movimento é automação?"*, sem nenhum sinal de 
 
 **Testes:** 229 no total — 169 puros (0,3s) e 60 com sessão Spark local.
 
+### 10.5 Detalhe da Etapa 4 (concluída)
+
+| Sub-passo | Entrega |
+|---|---|
+| 4.1 | Endpoint `/repos/{repo}` — segundo endpoint, atravessando as três camadas |
+| 4.2 | `dim_tempo` — gerada, um dia por linha |
+| 4.3 | Chaves substitutas determinísticas por hash |
+| 4.4 | `dim_autor` — SCD1, chave híbrida |
+| 4.5 | `dim_repositorio` — SCD2 derivada (seção 6.4) |
+| 4.6 | Notebooks `07` e `08` + bateria da gold |
+
+**A abstração esticou.** O `Endpoint` foi escrito na Etapa 1 para N endpoints e testado
+com um só. A segunda instância — recurso único em vez de lista paginada — exigiu apenas
+mais um grau de liberdade: `chaves`, as colunas que identificam uma linha na bronze
+(`(repo, sha)` na lista, `(repo, dt)` no snapshot). Duas linhas alteradas em `bronze.py`,
+nenhum teste quebrado.
+
+A ingestão ganhou um caminho paralelo, `ingerir_snapshot()`, em vez de ramos dentro de
+`ingerir()`: recurso único não tem paginação, watermark nem `since`, e forçar os dois no
+mesmo corpo faria uma função com duas personalidades.
+
+**Sem sentinela no snapshot**, deliberadamente: um `304` economizaria uma requisição e
+deixaria um dia sem foto — e dia sem foto não se distingue de dia sem mudança.
+
+**Verificação com dado real** — 2026-08-23:
+
+| Dimensão | Linhas | Observação |
+|---|---|---|
+| `dim_tempo` | 1.000 dias | 2024-11-27 a 2027-08-23 |
+| `dim_autor` | 1.321 | 1.295 por conta + 25 por e-mail + membro desconhecido |
+| `dim_repositorio` | 14 versões | todas vigentes; uma única foto até agora |
+
+Bateria da gold: 8 verificações, 0 violações, incluindo as três invariantes da SCD2.
+
+#### O intervalo da dim_tempo é decidido por `autorado_em`
+
+O commit mais antigo por data de **entrada** é de 2026-05-25 — o início da janela de 90
+dias. O mais antigo por data de **autoria** é de **2024-12-27**, dezessete meses antes.
+
+Se a dimensão de tempo tivesse sido gerada a partir de `commitado_em`, como seria natural,
+`fct_commit` apontaria para uma linha inexistente em toda vez que usasse a chave de
+autoria. E são muitas: 25% dos commits têm defasagem, 10% acima de 110 dias (seção 10.4).
+
+É a justificativa concreta da **dimensão com papéis** — `dim_tempo` referenciada duas
+vezes pelo mesmo fato, uma por data.
+
+#### O que o star schema respondeu antes de existir fato
+
+A junção das três dimensões com a silver de commits, exercitada no notebook `08`:
+
+| repo | autores | commits | commits por autor |
+|---|---|---|---|
+| `duckdb/duckdb` | 146 | 5.782 | **39,6** |
+| `dbt-labs/dbt-core` | 100 | 3.461 | 34,6 |
+| `trinodb/trino` | 85 | 1.556 | 18,3 |
+| `apache/spark` | 182 | 1.541 | 8,5 |
+| `apache/airflow` | **325** | 2.158 | **6,6** |
+| `apache/iceberg` | 97 | 498 | 5,1 |
+
+Dois modelos de desenvolvimento, separados por um fator de seis. O `airflow` tem **mais
+que o dobro** dos autores do `duckdb` e **um terço** dos commits: comunidade ampla com
+contribuição pontual. O `duckdb` e o `dbt-core` são o oposto — equipe pequena e intensa.
+
+Nenhuma das duas leituras aparece olhando só o total de commits, e nenhuma aparece olhando
+só o número de contribuidores. É a razão entre as duas, que só existe depois da junção.
+
+Um detalhe a mais: a soma dos autores por repositório é 1.357, contra 1.320 distintos no
+total. Cerca de **37 pessoas contribuem para mais de um projeto** do ecossistema.
+
 **Idempotência, medida no transaction log.** Sete versões da tabela bronze, em três
 sessões e quatro clusters diferentes: a primeira inseriu 200 linhas, as seis seguintes
 inseriram zero — todas lendo as mesmas 200 linhas de origem. Nessas seis,
@@ -881,7 +950,7 @@ inseriram zero — todas lendo as mesmas 200 linhas de origem. Nessas seis,
 correspondência não reescreve arquivo. E `matchedPredicates` vazio em todas registra,
 no próprio log, que esta tabela não tem caminho de `UPDATE`.
 
-### 10.5 Fluxo de trabalho
+### 10.6 Fluxo de trabalho
 
 ```powershell
 # 1. ativar o ambiente
@@ -925,7 +994,7 @@ qualquer máquina.
 > Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
 > do motor.
 
-### 10.6 Convenção de mensagens de commit
+### 10.7 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -938,7 +1007,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.7 Regras de manutenção deste documento
+### 10.8 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8 — registre
@@ -947,7 +1016,7 @@ Conventional Commits:
 4. Se uma decisão for revertida, **não apague** — registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.8 Melhorias planejadas
+### 10.9 Melhorias planejadas
 
 Viram commits de evolução, e essa evolução fica visível no histórico:
 
