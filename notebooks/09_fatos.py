@@ -191,6 +191,44 @@ display(
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC #### A mesma pergunta, com as decisoes analiticas explicitas
+# MAGIC
+# MAGIC A consulta acima usa `sk_data_commit` e nao filtra nada -- e por isso
+# MAGIC responde errado. Tres correcoes, cada uma com motivo:
+# MAGIC
+# MAGIC | Correcao | Por que |
+# MAGIC |---|---|
+# MAGIC | `sk_data_autoria` | a pergunta e *quando a pessoa trabalhou*, nao quando o codigo entrou |
+# MAGIC | `dias_ate_o_commit <= 7` | remove a migracao do `dbt-core` (2.919 commits num unico dia) e o rebase do `trino` |
+# MAGIC | `github_tipo <> 'bot'` | automacao roda em agenda e nao tem fim de semana |
+# MAGIC
+# MAGIC A diferenca entre as duas saidas e a demonstracao de que **filtro e
+# MAGIC escolha de chave de data sao decisoes analiticas, nao detalhes
+# MAGIC tecnicos**. O modelo dimensional as torna explicitas em vez de
+# MAGIC acidentais.
+
+# COMMAND ----------
+
+display(
+    spark.sql(
+        f"""
+        SELECT t.dia_da_semana, t.nome_dia, t.e_fim_de_semana,
+               count(*) AS commits,
+               round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS percentual
+        FROM {gold.TABELA_FCT_COMMIT} f
+        JOIN {gold.TABELA_TEMPO} t ON t.sk_tempo = f.sk_data_autoria
+        JOIN {gold.TABELA_AUTOR} a USING (sk_autor)
+        WHERE f.dias_ate_o_commit <= 7
+          AND (a.github_tipo IS NULL OR a.github_tipo <> 'bot')
+        GROUP BY t.dia_da_semana, t.nome_dia, t.e_fim_de_semana
+        ORDER BY t.dia_da_semana
+        """
+    )
+)
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### A dimensao de tempo nos dois papeis
 # MAGIC
 # MAGIC A mesma tabela, referenciada duas vezes pelo mesmo fato. Sem isto, a

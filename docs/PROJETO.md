@@ -1002,9 +1002,8 @@ Agrupando commits por mês de autoria contra mês de entrada, um padrão salta:
 
 **Doze meses de autoria desembocando num único mês de entrada.** Revisão lenta produz
 cauda decrescente e espalhada; isto é um funil, com volume quase uniforme ao longo de um
-ano — a assinatura de **enxerto de histórico** (`subtree`, `filter-branch`, ou merge de
-branch de vida muito longa), em que as datas de autoria originais são preservadas e a data
-de commit vira o dia da mesclagem.
+ano — datas de autoria originais preservadas, data de commit marcando o dia em que o
+código entrou.
 
 A auditoria por repositório localizou a origem:
 
@@ -1015,10 +1014,41 @@ A auditoria por repositório localizou a origem:
 | `trinodb/trino` | 579 | 2025-09-29 | 6,6 |
 | *(os outros onze)* | ≤ 729 | 2026-06-01 | ~0 |
 
-Três comportamentos distintos, que só se separam com as duas datas:
+#### Dois fenômenos diferentes, separados pela assinatura
 
-- **`dbt-core`** — enxerto: 149 dias de média, autoria recuando um ano
-- **`trino`** — PRs de vida longa: 6,6 dias, comportamento normal de projeto aberto
+Descer ao nível de autor revelou que os dois maiores casos **não são o mesmo evento**:
+
+| | `dbt-labs/dbt-core` | `trinodb/trino` |
+|---|---|---|
+| Autores | **8+ pessoas** | **1 pessoa** (`dain`) |
+| Janela de autoria | 2025-05-30 a 2026-02-20 | 2026-01-09 a 2026-03-13 |
+| Entrada | **um único dia**: 2026-06-01 | espalhada: junho a agosto |
+| Assinados | **100%** | **0%** |
+
+**`dbt-core` — migração de base de código.** Uma equipe inteira, nove meses de trabalho,
+tudo entrando num único dia, com todas as assinaturas válidas. Assinatura íntegra descarta
+rebase: reescrever um commit invalida a assinatura GPG. O que resta é um processo
+controlado — uma base desenvolvida em outro lugar, trazida para o repositório de uma vez.
+
+**`trino` — branch de longa duração integrada por rebase.** Uma pessoa, três meses de
+trabalho, entrando em levas ao longo de dois meses, **nenhuma assinatura sobrevivente**. É
+exatamente o que o rebase produz: as datas de autoria permanecem, as de commit marcam cada
+leva, e as assinaturas se perdem na reescrita.
+
+A distinção muda o significado analítico. A migração do `dbt-core` **não é atividade do
+período** — é história de outro lugar chegando. O caso do `trino` **é** atividade real, só
+que registrada com atraso.
+
+E a coluna que separou os dois — `assinatura_verificada` — não foi coletada para
+diagnosticar nada disso. Ela existe porque a silver tipa o que a origem entrega, e a
+bronze guarda o payload inteiro. **Campo preservado sem uso previsto vira instrumento de
+diagnóstico quando a pergunta aparece** — é o argumento da seção 4.2, em forma de caso
+concreto.
+
+Somando os três comportamentos:
+
+- **`dbt-core`** — migração: 149 dias de média, um dia de entrada, tudo assinado
+- **`trino`** — rebase de branch longa: 6,6 dias de média, nada assinado
 - **os demais** — commit no mesmo dia da autoria
 
 #### A distorção, medida
