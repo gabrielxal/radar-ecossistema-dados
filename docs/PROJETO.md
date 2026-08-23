@@ -386,10 +386,10 @@ Onde a memória do pipeline mora. Criada na Etapa 2 como
 É ela que transforma um script que roda uma vez num processo que roda todo dia sem refazer
 trabalho.
 
-### 5.7 Limitação conhecida: o teto de páginas apaga histórico em silêncio
+### 5.7 O teto de páginas apagava histórico em silêncio
 
-Descoberta com dado real, na verificação da Etapa 3. Não é hipótese: cinco dos catorze
-repositórios estão incompletos neste momento.
+Descoberto com dado real, na verificação da Etapa 3, e **corrigido em 2026-08-23**. Não era
+hipótese: cinco dos catorze repositórios estavam incompletos, e nada no pipeline dizia isso.
 
 O `limite_paginas` existe como válvula de segurança contra estourar a quota. Sozinho, seria
 uma escolha consciente. O problema é a interação com o watermark:
@@ -409,7 +409,7 @@ Medido em 2026-08-22, com janela de 90 dias (desde 24/05):
 | `datahub-project/datahub` | 2026-07-16 | ~2 meses |
 | `dbt-labs/dbt-core` | 2026-07-03 | ~6 semanas |
 
-Os outros nove alcançaram o início da janela e estão completos.
+Os outros nove alcançaram o início da janela e estavam completos.
 
 **O que torna isso grave não é a falta de dado — é o silêncio.** O pipeline segue com
 `status='ok'`, sem erro e sem aviso. E nenhuma bateria de qualidade pega: todas verificam o
@@ -419,6 +419,31 @@ dado que chegou; **nenhuma pergunta o que deveria ter chegado e não chegou.**
 omite é o nosso próprio código.
 
 Correção planejada, em ordem de prioridade:
+
+#### A recuperação
+
+Com os itens 1 e 2 no lugar, a recuperação foi feita apagando os checkpoints de `commits` e
+recoletando com teto elevado. O `duckdb/duckdb` exigiu três tentativas:
+
+| Teto | Resultado |
+|---|---|
+| 2 páginas | 200 commits *(primeiro teste da Etapa 2)* |
+| 20 páginas | 2.000 — truncado |
+| 40 páginas | 4.000 — truncado |
+| 100 páginas | **5.782 — completo, em 58 páginas** |
+
+Nas três primeiras o pipeline reportou sucesso. Só na terceira o `status='truncado'` existia
+para acusar.
+
+**Resultado**: 14 repositórios completos, bronze de 5.646 para **18.537** linhas.
+**Custo total**: 311 requisições, de 5.000/hora — 6% de uma hora de quota para recuperar três
+meses de histórico. Barato porque a landing zone e a bronze são idempotentes, e porque o ETag
+pulou de graça os repositórios que já estavam completos (resposta `304` não consome quota).
+
+**O que a recuperação revelou**: `duckdb/duckdb` faz ~64 commits por dia e responde por ~31%
+do total. Passou toda a Etapa 3 aparecendo como o menor da lista, com 200 linhas.
+
+#### As correções
 
 | # | Mudança | Estado |
 |---|---|---|
@@ -767,19 +792,43 @@ um único registro torto derruba a carga inteira.
 natureza: linha de bronze é cópia da origem, e corrigi-la destruiria a evidência; linha de
 silver é derivação, e uma regra de normalização melhor deve substituir o valor antigo.
 
-**Verificação com dado real** — 5.646 commits, 14 repositórios, 2026-08-23:
+**Verificação com dado real** — 18.537 commits, 14 repositórios, janela de 90 dias
+completa, 2026-08-23:
 
 | Medida | Valor |
 |---|---|
-| bronze = silver + quarentena | 5.646 = 5.646 + 0 ✅ |
+| bronze = silver + quarentena | 18.537 = 18.537 + 0 ✅ |
 | Verificações da bateria | 11 de 11 aprovadas, 0 violações |
-| Commits sem conta do GitHub (`author` nulo) | **80** — 21% do `dagster-io/dagster` |
-| Commits de bot | **594** (10,5%) |
-| Assinatura verificada | 4.191 (74%) contra 1.455 sem assinatura |
+| Commits sem conta do GitHub (`author` nulo) | **260** (1,4%) |
+| Commits de bot | **910** (4,9%) |
+| Assinatura verificada | 10.609 (57%) |
+| Autores distintos | 1.392 |
+| Merges | 1.588 (8,6%) |
 
-Os dois primeiros números justificam decisões de projeto que, sem dado real, seriam apenas
-argumento: `author` nulável não era zelo excessivo, e `bot` no domínio de `github_tipo` era
-carga útil — sem ele, 594 linhas teriam disparado aviso.
+Os dois primeiros justificam decisões que, sem dado real, seriam apenas argumento: `author`
+nulável não era zelo excessivo, e `bot` no domínio de `github_tipo` era carga útil — sem ele,
+910 linhas teriam disparado aviso.
+
+#### Dado incompleto não subestima: ele distorce
+
+Antes da recuperação da seção 5.7, a mesma bateria rodou sobre 5.646 commits e produziu
+conclusões diferentes:
+
+| Medida | Com 5.646 (incompleto) | Com 18.537 (completo) |
+|---|---|---|
+| Commits de bot | 10,5% | **4,9%** |
+| Sem conta do GitHub | 1,4% (80/5.646) | 1,4% (260/18.537) |
+| Assinatura verificada | 74% | **57%** |
+
+A proporção de bots caiu pela metade. O motivo é estrutural: a truncagem atingia justamente
+os repositórios **maiores** — eram eles que estouravam o teto de páginas. O que sobrava eram
+os pequenos, e entre eles projetos com automação intensa. A amostra não era aleatória: era
+enviesada **contra** o volume.
+
+A lição vale além deste caso: **perda silenciosa de dado raramente é uniforme.** Ela segue o
+mecanismo que a causou — aqui, o tamanho do repositório — e por isso desloca proporções em
+vez de apenas reduzir contagens. Uma análise sobre 5.646 linhas corretas teria respondido
+errado à pergunta *"quanto do movimento é automação?"*, sem nenhum sinal de erro.
 
 **Testes:** 229 no total — 169 puros (0,3s) e 60 com sessão Spark local.
 
