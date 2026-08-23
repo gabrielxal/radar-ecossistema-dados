@@ -786,8 +786,9 @@ Esta seção existe de propósito. Quem avalia um portfólio quer saber se o can
 | **2** | Tabela de controle + landing zone + camada bronze | Checkpoint, JSON cru particionado, idempotência, proveniência | ✅ concluída |
 | **3** | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ✅ concluída |
 | **4** | Gold — dimensões | Star schema, SCD2, chaves substitutas | ✅ concluída |
-| **5** | Gold — os três fatos | Transação, snapshot periódico, snapshot acumulado | ⏳ próxima |
-| **6** | CI, orquestração, README | GitHub Actions, Databricks Workflows, documentação | ☐ |
+| **5** | Gold — `fct_commit` e `fct_repo_snapshot` | Fato de transação, snapshot periódico, aditividade | ✅ concluída |
+| **6** | Endpoint `issues` + `fct_issue` | Snapshot acumulado, backfill em janelas | ⏳ próxima |
+| **7** | CI, orquestração, README | GitHub Actions, Databricks Workflows, documentação | ☐ |
 
 ### 10.2 Detalhe da Etapa 1 (concluída)
 
@@ -935,7 +936,12 @@ A junção das três dimensões com a silver de commits, exercitada no notebook 
 
 Dois modelos de desenvolvimento, separados por um fator de seis. O `airflow` tem **mais
 que o dobro** dos autores do `duckdb` e **um terço** dos commits: comunidade ampla com
-contribuição pontual. O `duckdb` e o `dbt-core` são o oposto — equipe pequena e intensa.
+contribuição pontual. O `duckdb` é o oposto — equipe pequena e intensa.
+
+> **Correção registrada (Etapa 5).** Na primeira leitura eu incluí o `dbt-core` no mesmo
+> grupo do `duckdb`. Estava errado: 84% dos commits dele são histórico enxertado, não
+> atividade dos 90 dias. Só a dimensão de tempo nos dois papéis revelou isso — ver a
+> seção 10.6.
 
 Nenhuma das duas leituras aparece olhando só o total de commits, e nenhuma aparece olhando
 só o número de contribuidores. É a razão entre as duas, que só existe depois da junção.
@@ -950,7 +956,95 @@ inseriram zero — todas lendo as mesmas 200 linhas de origem. Nessas seis,
 correspondência não reescreve arquivo. E `matchedPredicates` vazio em todas registra,
 no próprio log, que esta tabela não tem caminho de `UPDATE`.
 
-### 10.6 Fluxo de trabalho
+### 10.6 Detalhe da Etapa 5 (concluída)
+
+| Sub-passo | Entrega |
+|---|---|
+| 5.1 | `fct_commit` — fato de transação, grão de um commit |
+| 5.2 | `fct_repo_snapshot` — snapshot periódico, grão de um repositório por dia |
+| 5.3 | Vigência da SCD2 aberta para trás |
+| 5.4 | Bateria dos fatos: grão e integridade referencial |
+
+Escopo deliberado: dois dos três tipos de fato. O terceiro — snapshot acumulado — exige
+endpoint novo, backfill em janelas e um tipo de fato inédito, e virou a Etapa 6.
+
+**As três lições de aditividade**, declaradas no comentário de cada coluna porque nada no
+SQL as impõe:
+
+| Tipo | Exemplo | Restrição |
+|---|---|---|
+| Aditiva | `comentarios`, `qtd_pais` | soma por qualquer dimensão |
+| **Não aditiva** | `dias_ate_o_commit` | somar não produz grandeza; só média |
+| **Semi-aditiva** | `stars`, `forks` | soma entre repositórios, **nunca entre dias** |
+
+**`sha` é dimensão degenerada** — identificador da transação no próprio fato. Uma
+`dim_commit` teria o tamanho do fato e nenhum atributo a acrescentar.
+
+**As chaves de tempo são calculadas, não buscadas.** Como `sk_tempo` é `aaaammdd`, a data
+já é a chave: duas junções a menos por linha do fato. É o dividendo da chave inteligente
+decidida no passo 4.2. Em troca, a integridade referencial passa a ser responsabilidade da
+bateria — o Unity Catalog registra chave estrangeira mas não a impõe, e sem verificação um
+fato órfão não gera erro: a linha apenas some da consulta com junção.
+
+#### O que a dimensão de tempo nos dois papéis revelou
+
+Este é o achado que justifica a decisão de modelagem, e ele apareceu na **primeira**
+consulta que usou os dois papéis.
+
+Agrupando commits por mês de autoria contra mês de entrada, um padrão salta:
+
+```
+2026-05 → 2026-06    476        2025-08 → 2026-06    203
+2026-04 → 2026-06    290        2025-07 → 2026-06    202
+2025-09 → 2026-06    229        2025-06 → 2026-06    189
+2026-03 → 2026-06    227        ...
+```
+
+**Doze meses de autoria desembocando num único mês de entrada.** Revisão lenta produz
+cauda decrescente e espalhada; isto é um funil, com volume quase uniforme ao longo de um
+ano — a assinatura de **enxerto de histórico** (`subtree`, `filter-branch`, ou merge de
+branch de vida muito longa), em que as datas de autoria originais são preservadas e a data
+de commit vira o dia da mesclagem.
+
+A auditoria por repositório localizou a origem:
+
+| repo | commits em jun/2026 | autoria mais antiga | média de dias |
+|---|---|---|---|
+| `dbt-labs/dbt-core` | **2.919** | 2025-05-30 | **149,2** |
+| `duckdb/duckdb` | 2.311 | 2026-04-05 | 0,6 |
+| `trinodb/trino` | 579 | 2025-09-29 | 6,6 |
+| *(os outros onze)* | ≤ 729 | 2026-06-01 | ~0 |
+
+Três comportamentos distintos, que só se separam com as duas datas:
+
+- **`dbt-core`** — enxerto: 149 dias de média, autoria recuando um ano
+- **`trino`** — PRs de vida longa: 6,6 dias, comportamento normal de projeto aberto
+- **os demais** — commit no mesmo dia da autoria
+
+#### A distorção, medida
+
+| | |
+|---|---|
+| Massa total de atraso | 485.855 commit-dias |
+| Massa do enxerto do `dbt-core` | 435.515 (**89,6%**) |
+| Média de atraso do ecossistema | 26,21 dias |
+| **Média sem o enxerto** | **~3,2 dias** |
+
+**Um único evento inflava a métrica em 8×.** E 84% dos 3.461 commits do `dbt-core` nos 90
+dias não são atividade do período — são história importada.
+
+Duas consequências que mudam a análise:
+
+1. **Junho de 2026 parece um mês de atividade explosiva e não é.** Qualquer série temporal
+   ancorada em `commitado_em` mostraria um pico que não corresponde a trabalho feito no mês
+2. A leitura da seção 10.5 sobre o `dbt-core` como "equipe pequena e intensa" **estava
+   errada** — o volume era importação, não intensidade
+
+Nada disso é visível num fato com uma chave de data só. Com `commitado_em`, junho é um
+pico; com `autorado_em`, o mesmo trabalho aparece distribuído por um ano. **A dimensão com
+papéis não foi elegância de livro — foi a única forma de enxergar a diferença.**
+
+### 10.7 Fluxo de trabalho
 
 ```powershell
 # 1. ativar o ambiente
@@ -994,7 +1088,7 @@ qualquer máquina.
 > Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
 > do motor.
 
-### 10.7 Convenção de mensagens de commit
+### 10.8 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -1007,7 +1101,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.8 Regras de manutenção deste documento
+### 10.9 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8 — registre
@@ -1016,7 +1110,7 @@ Conventional Commits:
 4. Se uma decisão for revertida, **não apague** — registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.9 Melhorias planejadas
+### 10.10 Melhorias planejadas
 
 Viram commits de evolução, e essa evolução fica visível no histórico:
 
