@@ -420,11 +420,22 @@ omite é o nosso próprio código.
 
 Correção planejada, em ordem de prioridade:
 
-| # | Mudança | Por quê |
+| # | Mudança | Estado |
 |---|---|---|
-| 1 | `paginar()` informa que parou pelo teto; controle grava `status='truncado'` | Transforma perda silenciosa em perda visível. É o mínimo |
-| 2 | Não avançar o watermark quando houve truncagem | Impede que o buraco se torne permanente |
-| 3 | Backfill em janelas, com o parâmetro `until` da API | Recupera o que já ficou para trás |
+| 1 | `paginar()` informa que parou pelo teto; controle grava `status='truncado'`, e a bateria da bronze verifica com `carga_truncada` | ✅ feito |
+| 2 | Não avançar o watermark quando houve truncagem | ✅ feito |
+| 3 | Backfill em janelas, com o parâmetro `until` da API | ☐ |
+
+**Por que o item 2 não avança em vez de recuar.** A API entrega commits do mais
+novo para o mais antigo, e `since` só aceita limite inferior — não existe forma de
+voltar no tempo dentro do mesmo mecanismo. Preservar o watermark faz a execução
+seguinte tentar o mesmo intervalo: ela recoleta o que já tem, sem duplicar (a carga
+é idempotente), e completa assim que o teto for suficiente. O custo é quota gasta em
+releitura; o ganho é que a falta deixa de ser permanente e passa a ser visível a cada
+execução, até alguém agir.
+
+O item 3 só é necessário para janelas grandes demais para caber num teto razoável.
+Enquanto a janela for de 90 dias, elevar `limite_paginas` resolve.
 
 ---
 

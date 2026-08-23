@@ -194,8 +194,9 @@ for r in resultados:
 for r in resultados:
     if r.truncado:
         print(
-            f"TRUNCADO {r.repo}: parou no teto de {LIMITE_PAGINAS} paginas; "
-            "ha historico anterior nao coletado"
+            f"TRUNCADO {r.repo}: parou no teto de {LIMITE_PAGINAS} paginas. "
+            "O watermark NAO avancou -- a proxima execucao tenta o mesmo "
+            "intervalo. Aumente o teto para completar."
         )
 
 # COMMAND ----------

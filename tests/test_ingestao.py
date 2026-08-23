@@ -322,3 +322,42 @@ def test_carga_normal_continua_ok():
         etag=None, maior_data=MOMENTO, pulado=False,
     )
     assert proximo_checkpoint(None, normal, MOMENTO).status == "ok"
+
+
+def test_truncagem_nao_avanca_o_watermark():
+    # A API entrega do mais novo para o mais antigo e `since` so aceita limite
+    # inferior: avancar deixaria o buraco para tras, inalcancavel.
+    anterior = Checkpoint(
+        repo="x", endpoint="commits",
+        watermark=datetime(2026, 5, 24, tzinfo=timezone.utc),
+    )
+    truncada = ResultadoIngestao(
+        repo="x", endpoint="commits", registros=500, arquivo="a.jsonl",
+        etag=None, maior_data=datetime(2026, 8, 22, tzinfo=timezone.utc),
+        pulado=False, truncado=True,
+    )
+    proximo = proximo_checkpoint(anterior, truncada, MOMENTO)
+    assert proximo.watermark == anterior.watermark
+
+
+def test_coleta_completa_avanca_o_watermark_normalmente():
+    anterior = Checkpoint(
+        repo="x", endpoint="commits",
+        watermark=datetime(2026, 5, 24, tzinfo=timezone.utc),
+    )
+    completa = ResultadoIngestao(
+        repo="x", endpoint="commits", registros=120, arquivo="a.jsonl",
+        etag=None, maior_data=datetime(2026, 8, 22, tzinfo=timezone.utc),
+        pulado=False, truncado=False,
+    )
+    proximo = proximo_checkpoint(anterior, completa, MOMENTO)
+    assert proximo.watermark > anterior.watermark
+
+
+def test_truncagem_na_primeira_execucao_nao_inventa_watermark():
+    truncada = ResultadoIngestao(
+        repo="x", endpoint="commits", registros=500, arquivo="a.jsonl",
+        etag=None, maior_data=datetime(2026, 8, 22, tzinfo=timezone.utc),
+        pulado=False, truncado=True,
+    )
+    assert proximo_checkpoint(None, truncada, MOMENTO).watermark is None

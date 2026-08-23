@@ -144,10 +144,22 @@ def proximo_checkpoint(
     resultado: "ResultadoIngestao",
     momento: datetime,
 ) -> Checkpoint:
-    """Checkpoint a gravar depois de uma ingestao."""
+    """Checkpoint a gravar depois de uma ingestao.
+
+    Quando a coleta foi truncada pelo teto de paginas, o watermark **nao
+    avanca**. A API entrega os registros do mais novo para o mais antigo e
+    `since` so aceita limite inferior: nao ha como voltar no tempo para buscar
+    o que ficou para tras. Avancar tornaria a falta permanente e invisivel.
+    Preservar mantem a proxima execucao tentando o mesmo intervalo -- ela
+    recoleta o que ja tem, sem duplicar (a carga e idempotente), e completa
+    quando o teto for suficiente.
+    """
     watermark = calcular_watermark(resultado.maior_data)
     if watermark is None and anterior is not None:
         watermark = anterior.watermark  # nada novo: preserva o watermark anterior
+
+    if resultado.truncado:
+        watermark = anterior.watermark if anterior else None
 
     return Checkpoint(
         repo=resultado.repo,
