@@ -784,10 +784,16 @@ job diário gastaria compute de graça para reprocessar o que a API ainda guarda
 
 | Job | Cadência | Tarefas |
 |---|---|---|
-| `radar-snapshot-diario` | diária | `07_repositorios` |
-| `radar-pipeline-completo` | semanal | as oito, em DAG |
+| `snapshot-diario-radar` | diária, 9h | `07_repositorios` |
+| `pipeline-completo-radar` | domingo, 9h30 | as oito, em DAG |
 
-As definições estão versionadas em `orquestracao/*.yml`.
+As definições estão versionadas em `orquestracao/*.yml`. Elas descrevem o job, mas não o
+criam: quem cria é a interface do Databricks. Manter as duas em sincronia é trabalho
+manual enquanto não houver deploy automatizado, e o arquivo existe para que a configuração
+tenha histórico, revisão e caminho de recuperação como qualquer outro código.
+
+O endereço de notificação fica fora do repositório, com um marcador no lugar. Arquivo
+público com e-mail dentro é varrido por coleta automatizada.
 
 #### Por que `git_source` e não Git folder
 
@@ -818,6 +824,41 @@ depende de quê.
 Só as tarefas que tocam a rede têm `max_retries`. Falha de API é transitória e a segunda
 tentativa costuma passar. Falha em `dimensoes` ou `fatos` é defeito de lógica ou de dado, e
 retentar apenas repete o erro cinco minutos depois.
+
+Vale notar que já existe uma camada de retentativa antes desta. O `github_client.py` faz
+backoff exponencial com até cinco tentativas, respeitando `Retry-After`. Quando a tarefa
+falha, o cliente já esgotou o próprio ciclo, e é por isso que o intervalo no job importa
+mais do que o número de tentativas.
+
+#### Primeira execução completa, medida
+
+Executado em 2026-08-24, com as oito tarefas aprovadas:
+
+| | |
+|---|---|
+| Soma das durações | 11m54s |
+| Caminho crítico real | ~9m40s |
+| Ganho da paralelização | ~2min |
+
+`ingestao_commits` levou 6m40s e `repositorios` 6m49s, rodando ao mesmo tempo. A segunda
+coube inteira dentro da sombra da primeira.
+
+O estado resultante, verificado por consulta única:
+
+| Tabela | Linhas |
+|---|---|
+| `bronze.commits` | 18.673 |
+| `silver.commits` | 18.673 |
+| `gold.fct_commit` | 18.673 |
+| `silver.repositorios` | 28 |
+| `gold.fct_repo_snapshot` | 28 |
+| Dias com foto | 2 |
+
+Dois detalhes que a execução comprovou. O primeiro é que a igualdade entre as três camadas
+atravessou uma execução automática, sem ninguém acompanhando. O segundo é mais sutil: o
+job diário coletou às 9h e o pipeline coletou de novo no mesmo dia, e mesmo assim há apenas
+duas fotos. A chave `(repo, dt)` da bronze colapsou as duas coletas numa linha, que é
+exatamente o que o grão de um repositório por dia exige.
 
 ---
 
