@@ -715,7 +715,7 @@ amanhã e quebra sem que nada tenha mudado no código.
 `--exclude-editable` impede que o próprio pacote entre na lista apontando para um caminho
 local que não existe em outra máquina.
 
-**Regra adotada: sempre `python -m pip`, nunca `pip` sozinho.** Ver [diário de bordo #5](#9-diário-de-bordo).
+**Regra adotada: sempre `python -m pip`, nunca `pip` sozinho.** Ver [diário de bordo #3](#9-diário-de-bordo).
 
 ### 8.7 Gestão de segredo
 
@@ -745,7 +745,28 @@ de credencial existir.
 `.gitattributes` com `* text=auto eol=lf`.
 
 Evita a praga de time misto Windows/Mac/Linux: o PR com "500 linhas alteradas" quando só uma
-mudou. E evita o bug documentado no [diário de bordo #3](#9-diário-de-bordo).
+mudou. E evita o bug documentado no [diário de bordo #1](#9-diário-de-bordo).
+
+### 8.9 Sessão Spark local
+
+`pyspark` é dependência de desenvolvimento (`pip install -e ".[dev]"`), não de
+execução: no Databricks o motor vem do cluster, e instalá-lo lá conflitaria com o runtime.
+
+A sessão local cobre schema, `from_json`, casts, decodificação de partição e
+deduplicação. Não cobre Delta, Volume nem Unity Catalog: `MERGE`, `saveAsTable` e
+`DESCRIBE HISTORY` seguem validados apenas no Databricks.
+
+| Variável | Para quê |
+|---|---|
+| `PYSPARK_PYTHON` | resolvida sozinha no `conftest.py`, a partir do interpretador que roda os testes; sem ela o worker falha com `Accept timed out` |
+| `HADOOP_HOME` | no Windows, aponta para o diretório com `winutils.exe` e `hadoop.dll`; sem ela, os testes que leem arquivo são pulados, não quebrados |
+
+`HADOOP_HOME` mora no `.env`, que não é versionado, então o repositório continua clonável em
+qualquer máquina.
+
+> Limite a ter em mente: o runtime do Databricks é mais novo que o `pyspark` do venv.
+> Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
+> do motor.
 
 ---
 
@@ -754,24 +775,66 @@ mudou. E evita o bug documentado no [diário de bordo #3](#9-diário-de-bordo).
 Esta seção existe de propósito. Quem avalia um portfólio quer saber se o candidato
 diagnostica ou apenas executa.
 
-| # | Sintoma | Causa raiz | Lição generalizável |
+Estão registrados os problemas que custaram tempo e deixaram lição transferível. Erro de
+digitação e tropeço de instalação ficaram de fora: custam minutos e não ensinam nada que
+sobreviva ao próximo projeto.
+
+Os grupos não são cronológicos. Eles reúnem por natureza da causa, porque foi assim que os
+padrões apareceram: três incidentes distintos com a mesma raiz valem mais juntos do que
+separados.
+
+### 9.1 Ambiente local
+
+| # | Sintoma | Causa raiz | Lição |
 |---|---|---|---|
-| 1 | `git clone` → `Repository not found` | Erro de digitação no usuário e nome do repositório com `_` em vez de `-` | O GitHub devolve a mesma mensagem para *não existe*, *nome errado* e *privado sem acesso*, de propósito, para não vazar a existência de repositórios privados. Desconfie de digitação primeiro |
-| 2 | `Activate.ps1` bloqueado | Política de execução padrão do Windows é `Restricted` | `RemoteSigned` em escopo `CurrentUser` é o equilíbrio: script local roda, script baixado exige assinatura, e não requer admin |
-| 3 | `git check-ignore` afirmando que `data/` estava ignorado, sem que a regra existisse | `.gitignore` com CRLF: numa linha em branco, o `\r` residual é lido como padrão e o comando devolve falso positivo para qualquer caminho. Reproduzido em repositório isolado | Ferramenta de diagnóstico também erra. Em questão de segurança, valide pelo comportamento real (`git status` com o arquivo criado), não pelo que o utilitário afirma |
-| 4 | Arquivo `env` (sem ponto) contendo o token, preparado para commit | O Explorer do Windows recusa nomes iniciados por ponto | Credencial exposta é credencial queimada. Se tivesse havido push, apagar o arquivo não resolveria, porque o token permanece no histórico. O procedimento correto é *revogar*, gerar novo, e só então limpar |
-| 5 | `pip install -e .` instalando no Python global, com o venv aparentemente ativo | O `.venv` foi criado sem `pip.exe`; o PATH caiu no pip do sistema | Sempre `python -m pip`, nunca `pip`. `pip` é um executável resolvido pelo PATH e pode apontar para outro interpretador; `python -m pip` usa o pip do Python que está rodando. Verifique com `python -c "import sys; print(sys.executable)"` |
-| 6 | Medição de consumo de quota resultando em `-1` | O endpoint `/rate_limit` serve valor em cache (reportava 5000 enquanto as respostas reais diziam 4991) e não consome quota | Meça pelo header da resposta que interessa (`X-RateLimit-Remaining`), não por um endpoint de status separado. Valida a decisão de expor `rate_remaining` em toda `Resposta` |
-| 7 | `SyntaxError` apontando para `def paginar(` | O `)` que fechava o `return Resposta(` foi sobrescrito ao colar | `SyntaxError` quase sempre aponta a linha seguinte ao erro real, porque o interpretador só percebe o problema ao encontrar um token inesperado. Olhe sempre a linha anterior: costuma ser parêntese, colchete ou aspas sem fechar |
-| 8 | `TABLE_OR_VIEW_NOT_FOUND` no meio do laço de ingestão | O `00_setup_catalogo` tinha sido dividido em dois notebooks e só o de credenciais chegou a rodar, e a tabela de controle nunca foi criada | Dependência ausente deve falhar cedo e nomeada. Uma verificação de pré-voo antes da primeira requisição troca um erro do motor no meio do processamento por uma mensagem que identifica o que falta, e evita gastar quota antes de descobrir. Corolário achado no mesmo diagnóstico: a leitura do checkpoint estava fora do `try/except`, então o erro atravessou a proteção que existia justamente para isolar falha por repositório |
-| 9 | `CONFIG_NOT_AVAILABLE` ao definir `spark.sql.sources.partitionColumnTypeInference.enabled` | O Serverless aceita alterar apenas uma lista fechada de configurações do Spark | Em ambiente gerenciado, expresse a intenção no código, não na sessão. O mesmo efeito veio de um `cast("string")` na projeção: explícito, versionado e imune a restrição de plataforma. Configuração de sessão é global, invisível para quem lê o código depois, e pode simplesmente não existir no ambiente |
-| 10 | Correção em `src/` sem efeito algum depois do `git pull` | Módulo já importado permanece em `sys.modules` pelo resto da vida do interpretador | Notebook e módulo importado têm ciclos de vida diferentes. A célula reexecuta e reflete a mudança; o módulo fica congelado até `dbutils.library.restartPython()`. É o preço da decisão 8.1, que mantém a lógica em `src/`, e vale pagá-lo |
-| 11 | `SyntaxError: invalid syntax` na primeira célula de um notebook | `%load_ext autoreload` é magic do IPython, não do Databricks; o que a plataforma não reconhece como magic vai direto para o parser do Python | Prática de Jupyter não é automaticamente portátil para o Databricks. A plataforma tem as ferramentas dela: `restartPython()` no lugar do `autoreload` |
-| 12 | `UnsatisfiedLinkError: NativeIO$Windows.access0` ao ler arquivo local pelo Spark | Leitura de arquivo no Windows passa pela camada nativa do Hadoop, que exige `winutils.exe` e `hadoop.dll` | Limitação de ambiente também é sinal de projeto. Antes de instalar o binário de terceiros, a saída foi separar I/O de transformação (`ler_landing` e `projetar`), desenho melhor de qualquer forma, que tornou a regra de negócio testável sem tocar o disco |
-| 13 | Teste escrito com a resposta "óbvia" falhou: `from_json` sobre JSON inválido | Em modo permissivo ele não devolve `NULL` na coluna, e sim um struct com todos os campos nulos | A detecção de registro inválido não pode ser `coluna IS NULL`. O desenho da quarentena da Etapa 3 mudou por causa disso, antes mesmo de existir. Sem sessão Spark local, o erro só apareceria com o pipeline já rodando |
-| 14 | `NOT_SUPPORTED_WITH_SERVERLESS: PERSIST TABLE` na carga da silver | `df.cache()` não existe em compute gerenciado | A saída não é procurar um substituto para persistir, é reduzir passagens, ou materializar em tabela, que é armazenamento que a plataforma oferece. Terceiro caso da mesma família (`spark.conf` fechada, magic do IPython recusada, agora `cache`), e a regra é a mesma: máquina que você não controla é máquina cujo motor você não configura |
-| 15 | Depois de corrigido e enviado, o mesmo erro por três rodadas | O `git pull` chegou, o `restartPython()` não. E o diagnóstico usado para descartar essa hipótese estava errado: `inspect.getsource(modulo)` lê o arquivo em disco, não o objeto carregado | Escolha a ferramenta que observa o que você quer saber. Para saber o que está em execução, pergunte à memória: `hasattr(modulo, "SIMBOLO_NOVO")`. A pergunta feita ao alvo errado devolve uma resposta verdadeira e inútil, e custou três tentativas de correção às cegas |
-| 16 | `[FALHA] 3. merge dos aprovados: AttributeError`, lido como defeito no `MERGE` | Uma célula de diagnóstico temporária, escrita duas versões antes, chamava função que a refatoração removeu. O `MERGE` nunca chegou a executar | `try/except` com rótulo próprio descreve a sua intenção, não o que falhou. O rótulo `"merge dos aprovados"` apareceu colado a um erro ocorrido antes do merge. Andaime de diagnóstico tem prazo de validade: apague quando o diagnóstico terminar |
+| 1 | `git check-ignore` afirmando que `data/` estava ignorado, sem que a regra existisse | `.gitignore` gravado com CRLF: numa linha em branco, o `\r` residual é lido como padrão e o comando devolve falso positivo para qualquer caminho. Reproduzido em repositório isolado | Ferramenta de diagnóstico também erra. Em questão de segurança, valide pelo comportamento real (`git status` com o arquivo criado), não pelo que o utilitário afirma |
+| 2 | Arquivo de credencial criado como `env`, sem o ponto, e portanto fora do alcance do `.gitignore` | O Explorer do Windows recusa nomes iniciados por ponto, então o arquivo nasce com o nome errado | Detectado no `git status` antes de qualquer commit, e o token foi rotacionado mesmo assim. A regra que fica: `.gitignore` protege por nome, e nome depende da ferramenta que criou o arquivo. Confira o que está para ser enviado, não o que você acha que configurou |
+| 3 | `pip install -e .` instalando no Python global, com o venv aparentemente ativo | O `.venv` foi criado sem `pip.exe`, e o PATH caiu no pip do sistema | Sempre `python -m pip`, nunca `pip`. O primeiro usa o pip do interpretador que está rodando; o segundo é um executável resolvido pelo PATH e pode apontar para outro Python |
+| 4 | `UnsatisfiedLinkError: NativeIO$Windows.access0` ao ler arquivo local pelo Spark | Leitura de arquivo no Windows passa pela camada nativa do Hadoop, que exige `winutils.exe` e `hadoop.dll` | Limitação de ambiente também é sinal de projeto. Antes de instalar o binário de terceiros, a saída foi separar I/O de transformação (`ler_landing` e `projetar`), desenho melhor de qualquer forma, que tornou a regra de negócio testável sem tocar o disco |
+
+### 9.2 Plataforma gerenciada
+
+Três incidentes com uma raiz só: máquina que você não controla é máquina cujo motor você
+não configura. O padrão só ficou visível no terceiro.
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 5 | `CONFIG_NOT_AVAILABLE` ao definir `spark.sql.sources.partitionColumnTypeInference.enabled` | O Serverless aceita alterar apenas uma lista fechada de configurações do Spark | Em ambiente gerenciado, expresse a intenção no código, não na sessão. O mesmo efeito veio de um `cast("string")` na projeção: explícito, versionado e imune a restrição de plataforma |
+| 6 | `SyntaxError: invalid syntax` na primeira célula de um notebook | `%load_ext autoreload` é magic do IPython, não do Databricks, e o que a plataforma não reconhece vai direto para o parser do Python | Prática de Jupyter não é automaticamente portátil. A plataforma tem as ferramentas dela: `restartPython()` no lugar do `autoreload` |
+| 7 | `NOT_SUPPORTED_WITH_SERVERLESS: PERSIST TABLE` na carga da silver | `df.cache()` não existe em compute gerenciado | A saída não é procurar substituto para persistir, é reduzir o número de passagens, ou materializar em tabela, que é armazenamento que a plataforma oferece. Apagar o `cache()` sem mais nada teria trocado um erro por uma lentidão silenciosa |
+
+### 9.3 Comportamento do motor e da origem
+
+Seis defeitos que o motor ou a API produzem sem levantar exceção. Todos devolvem um valor
+plausível e errado.
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 8 | Medição de consumo de quota resultando em `-1` | O endpoint `/rate_limit` serve valor em cache (reportava 5000 enquanto as respostas reais diziam 4991) e não consome quota | Meça pelo header da resposta que interessa (`X-RateLimit-Remaining`), não por um endpoint de status separado. Valida a decisão de expor `rate_remaining` em toda `Resposta` |
+| 9 | Teste escrito com a resposta "óbvia" falhou: `from_json` sobre JSON inválido | Em modo permissivo ele não devolve `NULL` na coluna, e sim um struct com todos os campos nulos | A detecção de registro inválido não pode ser `coluna IS NULL`. O desenho da quarentena da Etapa 3 mudou por causa disso, antes mesmo de a quarentena existir |
+| 10 | `qtd_pais` com valor `-1` num commit sem a chave `parents` no payload | `size(NULL)` devolve `-1` em modo legado, que é o padrão quando ANSI está desligado | Contagem negativa passa por qualquer verificação de nulo sem ser notada. A guarda foi escrita por precaução e só depois confirmada como necessária. Default legado não aparece na documentação de uso, aparece em teste |
+| 11 | `SparkUpgradeException` ao pedir o ano ISO com `date_format(data, 'YYYY')` | O Spark 3 recusa o padrão por ambiguidade histórica entre ano de calendário e ano da semana | Erro que o motor recusa é melhor que erro que ele aceita: a versão antiga devolvia número errado em silêncio na virada de ano. A norma ISO define o ano da semana como o ano da sua quinta-feira, o que dá `year(date_add(data, 4 - dia_iso))` sem depender de padrão de formatação |
+| 12 | `try_to_timestamp('2026-08-01T10:00:00Z')` devolvendo `07:00` num teste | O valor armazenado está correto. O `collect()` do PySpark converte `TIMESTAMP` para o fuso do driver, que era Buenos Aires | Teste que compara `datetime` colhido em Python passa ou falha conforme a máquina de quem roda. Verifique por `date_format` no fuso da sessão, que não passa pelo driver |
+| 13 | Risco de duas entidades diferentes gerarem a mesma chave substituta | `concat_ws` ignora argumentos nulos, então `("a", NULL)` e `("a")` produzem o mesmo texto. E separador comum faria `("a\|b")` colidir com `("a", "b")` | Hash de chave composta precisa de marcador para o nulo e de separador que não ocorra no dado. Colisão em chave substituta liga o fato à linha errada da dimensão, sem erro nenhum |
+
+### 9.4 Perda silenciosa de dado
+
+O grupo mais caro do projeto. Nos três casos o pipeline reportou sucesso.
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 14 | Cinco repositórios com três meses de histórico faltando, com `status='ok'` e sem aviso | `limite_paginas` corta a coleta nos registros mais recentes, e o watermark avança para o commit mais novo, o que torna o buraco inalcançável | Todas as verificações olhavam o dado que chegou; nenhuma perguntava o que deveria ter chegado. Diagnóstico e correção na seção 5.7 |
+| 15 | Proporção de commits de bot caindo de 10,5% para 4,9% depois de recuperar o histórico | A truncagem atingia os repositórios maiores, porque eram eles que estouravam o teto de páginas | Perda silenciosa raramente é uniforme: segue o mecanismo que a causou e desloca proporções, não apenas contagens. As 5.646 linhas da amostra estavam todas corretas, e a conclusão tirada delas estava errada por um fator de dois |
+| 16 | Risco de o repositório truncado ser pulado para sempre | O checkpoint guarda o ETag, e a sentinela olha só o topo da lista: sem commit novo lá, ela responde `304` e o repositório é ignorado | Duas otimizações corretas se anulando. O ETag economiza quota e o watermark preservado evita perder histórico, mas juntas travariam justamente o repositório que se sabe incompleto. Interação entre decisões merece teste próprio |
+
+### 9.5 Método de diagnóstico
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 17 | `TABLE_OR_VIEW_NOT_FOUND` no meio do laço de ingestão | O `00_setup_catalogo` tinha sido dividido em dois notebooks e só o de credenciais chegou a rodar, então a tabela de controle nunca foi criada | Dependência ausente deve falhar cedo e nomeada. A verificação de pré-voo troca um erro do motor no meio do processamento por uma mensagem que identifica o que falta, e evita gastar quota antes de descobrir. No mesmo diagnóstico apareceu um corolário: a leitura do checkpoint estava fora do `try/except`, e o erro atravessou a proteção que existia para isolar falha por repositório |
+| 18 | Correção em `src/` sem efeito algum depois do `git pull` | Módulo já importado permanece em `sys.modules` pelo resto da vida do interpretador | Notebook e módulo importado têm ciclos de vida diferentes. A célula reexecuta e reflete a mudança; o módulo fica congelado até `dbutils.library.restartPython()`. É o preço da decisão 8.1, que mantém a lógica em `src/`, e vale pagá-lo |
+| 19 | Depois de corrigido e enviado, o mesmo erro por três rodadas | O `git pull` chegou, o `restartPython()` não. E o diagnóstico usado para descartar essa hipótese estava errado: `inspect.getsource(modulo)` lê o arquivo em disco, não o objeto carregado | Escolha a ferramenta que observa o que você quer saber. Para saber o que está em execução, pergunte à memória: `hasattr(modulo, "SIMBOLO_NOVO")`. A pergunta feita ao alvo errado devolve uma resposta verdadeira e inútil, e custou três tentativas de correção às cegas |
+| 20 | `[FALHA] 3. merge dos aprovados: AttributeError`, lido como defeito no `MERGE` | Uma célula de diagnóstico temporária, escrita duas versões antes, chamava função que a refatoração havia removido. O `MERGE` nunca chegou a executar | `try/except` com rótulo próprio descreve a sua intenção, não o que falhou. O rótulo apareceu colado a um erro ocorrido antes do merge. Andaime de diagnóstico tem prazo de validade: apague quando o diagnóstico terminar |
 
 ---
 
@@ -1022,24 +1085,24 @@ Descer ao nível de autor mostrou que os dois maiores casos não são o mesmo ev
 
 | | `dbt-labs/dbt-core` | `trinodb/trino` |
 |---|---|---|
-| Autores | 8+ pessoas | 1 pessoa (`dain`) |
+| Autores | 8 ou mais pessoas | um único autor |
 | Janela de autoria | 2025-05-30 a 2026-02-20 | 2026-01-09 a 2026-03-13 |
 | Entrada | um único dia: 2026-06-01 | espalhada: junho a agosto |
 | Assinados | 100% | 0% |
 
-No `dbt-core` o caso é de migração de base de código. Uma equipe inteira, nove meses de
-trabalho, e tudo entra num único dia com as assinaturas válidas. A assinatura íntegra é o
-que descarta a hipótese de rebase, porque reescrever um commit invalida a assinatura GPG.
-Sobra um processo controlado: uma base desenvolvida em outro lugar e trazida para o
-repositório de uma vez.
+No `dbt-core` o padrão é compatível com migração de base de código. Uma equipe inteira,
+nove meses de trabalho, e tudo entra num único dia com as assinaturas válidas. A assinatura
+íntegra é o que torna improvável a hipótese de rebase, porque reescrever um commit invalida
+a assinatura GPG. O que resta é algum processo controlado de importação, cujo mecanismo
+exato não é observável a partir da API.
 
-No `trino` o caso é de branch de longa duração integrada por rebase. Uma pessoa, três meses
-de trabalho, entrando em levas ao longo de dois meses, sem nenhuma assinatura sobrevivente.
-É o que o rebase produz: as datas de autoria permanecem, as de commit marcam cada leva, e
-as assinaturas se perdem na reescrita.
+No `trino` o padrão é compatível com branch de longa duração integrada por rebase. Um único
+autor, três meses de trabalho, entrando em levas ao longo de dois meses, sem nenhuma
+assinatura sobrevivente. É o que o rebase produz: as datas de autoria permanecem, as de
+commit marcam cada leva, e as assinaturas se perdem na reescrita.
 
-A distinção muda o significado analítico. A migração do `dbt-core` não é atividade do
-período, e sim história de outro lugar chegando. Já o caso do `trino` é atividade real,
+A distinção muda o significado analítico. O volume do `dbt-core` não é atividade do
+período, e sim história anterior chegando de uma vez. Já o caso do `trino` é atividade real,
 apenas registrada com atraso.
 
 A coluna que separou os dois, `assinatura_verificada`, não foi coletada para diagnosticar
@@ -1058,12 +1121,12 @@ Resumindo os três comportamentos:
 | | |
 |---|---|
 | Massa total de atraso | 485.855 commit-dias |
-| Massa da migração do `dbt-core` | 435.515 (89,6%) |
+| Massa do evento no `dbt-core` | 435.515 (89,6%) |
 | Média de atraso do ecossistema | 26,21 dias |
-| Média sem a migração | ~3,2 dias |
+| Média sem esse evento | ~3,2 dias |
 
 Um único evento inflava a métrica em oito vezes. Dos 3.461 commits do `dbt-core` nos 90
-dias, 84% não são atividade do período: são história importada.
+dias, 84% não são atividade do período: são história anterior, absorvida de uma vez.
 
 Duas consequências mudam a análise:
 
@@ -1099,11 +1162,11 @@ Três correções separam uma leitura da outra, e cada uma é uma decisão anal�
 | Correção | Por quê |
 |---|---|
 | `sk_data_autoria` no lugar de `sk_data_commit` | a pergunta é *quando a pessoa trabalhou* |
-| `dias_ate_o_commit <= 7` | remove a migração do `dbt-core` e o rebase do `trino` |
+| `dias_ate_o_commit <= 7` | remove o evento do `dbt-core` e o rebase do `trino` |
 | `github_tipo <> 'bot'` | automação roda em agenda e não tem fim de semana |
 
 A leitura bruta erra o padrão da semana inteiro. Nela a segunda-feira aparece como o dia
-mais produtivo do ecossistema, quando é o penúltimo. Os 2.919 commits da migração caíram
+mais produtivo do ecossistema, quando é o penúltimo. Os 2.919 commits desse evento caíram
 todos num 2026-06-01 que era uma segunda, e inflaram o dia em 11 pontos percentuais.
 
 Corrigido, o que aparece é o perfil típico de trabalho profissional: pico no meio da semana,
@@ -1128,51 +1191,7 @@ dado novo, e sim de escolhas que ficaram visíveis porque o modelo dimensional a
 consulta direta sobre a silver elas estariam embutidas, e a resposta errada não teria como
 ser questionada.
 
-### 10.7 Fluxo de trabalho
-
-```powershell
-# 1. ativar o ambiente
-.\.venv\Scripts\Activate.ps1
-
-# 2. trabalhar em src/ e tests/
-
-# 3. laco rapido: so os testes que nao sobem JVM
-pytest -m "not spark"
-
-# 4. antes de commitar: a suite inteira
-pytest
-
-# 5. commit descritivo
-git add .
-git status          # SEMPRE revise antes de commitar
-git commit -m "feat: descricao do que mudou"
-git push
-
-# 6. no Databricks: botao Pull no Git folder, e rodar o notebook
-```
-
-#### Sessão Spark local
-
-`pyspark` é dependência de desenvolvimento (`pip install -e ".[dev]"`), não de
-execução: no Databricks o motor vem do cluster, e instalá-lo lá conflitaria com o runtime.
-
-A sessão local cobre schema, `from_json`, casts, decodificação de partição e
-deduplicação. Não cobre Delta, Volume nem Unity Catalog: `MERGE`, `saveAsTable` e
-`DESCRIBE HISTORY` seguem validados apenas no Databricks.
-
-| Variável | Para quê |
-|---|---|
-| `PYSPARK_PYTHON` | resolvida sozinha no `conftest.py`, a partir do interpretador que roda os testes; sem ela o worker falha com `Accept timed out` |
-| `HADOOP_HOME` | no Windows, aponta para o diretório com `winutils.exe` e `hadoop.dll`; sem ela, os testes que leem arquivo são pulados, não quebrados |
-
-`HADOOP_HOME` mora no `.env`, que não é versionado, então o repositório continua clonável em
-qualquer máquina.
-
-> Limite a ter em mente: o runtime do Databricks é mais novo que o `pyspark` do venv.
-> Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
-> do motor.
-
-### 10.8 Convenção de mensagens de commit
+### 10.7 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -1185,7 +1204,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.9 Regras de manutenção deste documento
+### 10.8 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8. Registre
@@ -1194,7 +1213,7 @@ Conventional Commits:
 4. Se uma decisão for revertida, não apague: registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.10 Melhorias planejadas
+### 10.9 Melhorias planejadas
 
 Viram commits de evolução, e essa evolução fica visível no histórico:
 
