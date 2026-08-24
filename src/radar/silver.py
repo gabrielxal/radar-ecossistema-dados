@@ -19,14 +19,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from radar import bronze, controle
+from radar import bronze, controle, silver_comum
 from radar.config import SILVER, fqn
 from radar.ingestao import Endpoint
+from radar.silver_comum import COLUNA_DADOS
 
 TABELA_COMMITS = fqn(SILVER, "commits")
-
-# Coluna que recebe o payload ja estruturado.
-COLUNA_DADOS = "dados"
 
 # Schema parcial de proposito: campo do JSON que nao esta aqui e ignorado pelo
 # `from_json`. A silver declara o que promete entregar; o resto continua
@@ -82,55 +80,13 @@ MOTIVOS_DE_ASSINATURA = (
 # --------------------------------------------------------------------------
 
 def parsear(df, coluna: str = "payload"):
-    """Aplica o schema declarado ao payload, preservando as demais colunas.
-
-    Campo do JSON ausente no schema e ignorado; campo do schema ausente no
-    JSON vira NULL. Nenhum dos dois interrompe a leitura: o que nao couber no
-    contrato e tratado no passo de quarentena.
-    """
-    from pyspark.sql import functions as F
-
-    return df.withColumn(COLUNA_DADOS, F.from_json(F.col(coluna), SCHEMA_COMMIT))
+    """O parser generico, fixado no schema de commit."""
+    return silver_comum.parsear(df, SCHEMA_COMMIT, coluna)
 
 
 # --------------------------------------------------------------------------
 # Tipagem e normalizacao
 # --------------------------------------------------------------------------
-
-def _texto(coluna):
-    """Apara espacos e transforma string vazia em NULL.
-
-    `''` e NULL significam a mesma ausencia, mas comparam diferente: um
-    `WHERE campo IS NULL` deixaria as vazias de fora, sem aviso.
-    """
-    from pyspark.sql import functions as F
-
-    return F.nullif(F.trim(coluna), F.lit(""))
-
-
-def _categoria(coluna):
-    """Texto normalizado para minusculas. Vale para coluna de dominio fechado.
-
-    Sem isso `User`, `user` e `USER` viram tres categorias da mesma coisa, e
-    nenhum GROUP BY corrige depois.
-    """
-    from pyspark.sql import functions as F
-
-    return F.lower(_texto(coluna))
-
-
-def _instante(coluna):
-    """Data ISO da API em TIMESTAMP.
-
-    `try_to_timestamp` e nao `to_timestamp`: com ANSI ligado, que e o padrao em
-    runtime recente do Databricks, o cast comum lanca excecao e derruba a
-    carga inteira por causa de um registro. A versao `try_` devolve NULL, e o
-    NULL e o que a quarentena procura.
-    """
-    from pyspark.sql import functions as F
-
-    return F.try_to_timestamp(coluna)
-
 
 def tipar(df, momento: datetime):
     """Projeta o struct `dados` em colunas tipadas, uma decisao por coluna.
@@ -148,33 +104,33 @@ def tipar(df, momento: datetime):
 
     return df.select(
         # Chave natural: hash, nunca convertido para numero.
-        _texto(dados["sha"]).alias("sha"),
-        _texto(F.col("repo")).alias("repo"),
+        silver_comum.texto(dados["sha"]).alias("sha"),
+        silver_comum.texto(F.col("repo")).alias("repo"),
 
         # Identidade do git: digitada na maquina de quem commitou, sempre
         # presente, sem garantia de corresponder a uma conta.
-        _texto(autoria["name"]).alias("autor_nome"),
-        _categoria(autoria["email"]).alias("autor_email"),
-        _texto(commit["name"]).alias("committer_nome"),
-        _categoria(commit["email"]).alias("committer_email"),
+        silver_comum.texto(autoria["name"]).alias("autor_nome"),
+        silver_comum.categoria(autoria["email"]).alias("autor_email"),
+        silver_comum.texto(commit["name"]).alias("committer_nome"),
+        silver_comum.categoria(commit["email"]).alias("committer_email"),
 
         # Duas datas distintas: quando o codigo foi escrito e quando entrou no
         # repositorio. Em rebase elas se afastam por meses.
-        _instante(autoria["date"]).alias("autorado_em"),
-        _instante(commit["date"]).alias("commitado_em"),
+        silver_comum.instante(autoria["date"]).alias("autorado_em"),
+        silver_comum.instante(commit["date"]).alias("commitado_em"),
 
-        _texto(dados["commit"]["message"]).alias("mensagem"),
+        silver_comum.texto(dados["commit"]["message"]).alias("mensagem"),
         dados["commit"]["comment_count"].cast("int").alias("comentarios"),
 
         verificacao["verified"].alias("assinatura_verificada"),
-        _categoria(verificacao["reason"]).alias("assinatura_motivo"),
+        silver_comum.categoria(verificacao["reason"]).alias("assinatura_motivo"),
 
         # Usuario do GitHub: resolvido pela plataforma, ausente quando o
         # e-mail do commit nao esta associado a conta nenhuma. `id` e a chave
         # estavel, porque login muda quando a pessoa renomeia a conta.
-        _texto(usuario["login"]).alias("github_login"),
+        silver_comum.texto(usuario["login"]).alias("github_login"),
         usuario["id"].alias("github_id"),
-        _categoria(usuario["type"]).alias("github_tipo"),
+        silver_comum.categoria(usuario["type"]).alias("github_tipo"),
 
         # A lista de pais vira cardinalidade: mais de um identifica merge.
         # Os sha dos pais nao respondem nenhuma pergunta do projeto e seguem
@@ -367,29 +323,10 @@ class ResultadoSilver:
         return self.lidos == self.aprovados + self.rejeitados
 
 
-def nome_processo(endpoint: Endpoint) -> str:
-    """Identificador do processo na tabela de controle."""
-    return f"{endpoint.nome}@silver"
-
-
 def criar_tabelas(spark) -> None:
     """Cria a tabela silver e a quarentena, se ainda nao existirem."""
     spark.sql(ddl_commits())
     spark.sql(ddl_rejeitados())
-
-
-def filtrar_novos(df, checkpoint):
-    """So o que entrou na bronze depois do ultimo processamento.
-
-    Comparacao estrita, sem janela de sobreposicao: linha da bronze nao muda
-    depois de gravada, ja que o MERGE de la nao tem ramo de UPDATE, entao
-    reprocessar a fronteira nao traria nada de novo.
-    """
-    from pyspark.sql import functions as F
-
-    if checkpoint is None or checkpoint.watermark is None:
-        return df
-    return df.where(F.col("_ingerido_em") > F.lit(checkpoint.watermark))
 
 
 # Lote classificado, materializado antes de ser roteado. Sobrescrito a cada
@@ -469,12 +406,12 @@ def _preparar_lote(spark, classificado) -> None:
 def carregar(spark, endpoint: Endpoint, momento: datetime) -> ResultadoSilver:
     """Le o que e novo na bronze, tipa, roteia e grava nas duas tabelas."""
     origem = bronze.nome_tabela(endpoint)
-    processo = nome_processo(endpoint)
+    processo = silver_comum.nome_processo(endpoint)
 
     from pyspark.sql import functions as F
 
     anterior = controle.ler(spark, origem, processo)
-    novos = filtrar_novos(spark.table(origem), anterior)
+    novos = silver_comum.filtrar_novos(spark.table(origem), anterior)
     _preparar_lote(spark, classificar(parsear(novos), momento))
 
     lote = spark.table(TABELA_LOTE)

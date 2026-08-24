@@ -21,7 +21,7 @@ REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
 
-from radar import bronze, controle, ingestao, silver
+from radar import bronze, controle, ingestao, silver, silver_comum
 
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
@@ -32,7 +32,7 @@ dbutils.widgets.text("endpoint", "commits", "Endpoint a processar")
 ENDPOINT = ingestao.ENDPOINTS[dbutils.widgets.get("endpoint").strip()]
 
 ORIGEM = bronze.nome_tabela(ENDPOINT)
-PROCESSO = silver.nome_processo(ENDPOINT)
+PROCESSO = silver_comum.nome_processo(ENDPOINT)
 agora = datetime.now(timezone.utc)
 
 print("origem     :", ORIGEM)

@@ -446,7 +446,7 @@ do total. Passou toda a Etapa 3 aparecendo como o menor da lista, com 200 linhas
 |---|---|---|
 | 1 | `paginar()` informa que parou pelo teto; controle grava `status='truncado'`, e a bateria da bronze verifica com `carga_truncada` | ✅ feito |
 | 2 | Não avançar o watermark quando houve truncagem | ✅ feito |
-| 3 | Backfill em janelas, com o parâmetro `until` da API | ☐ |
+| 3 | Backfill em janelas, com o parâmetro `until` da API | ✅ feito |
 
 **A interação com o ETag.** Um checkpoint truncado faz a ingestão ignorar o ETag
 guardado. A sentinela olha apenas o topo da lista: se nada mudou lá, ela responde
@@ -462,8 +462,81 @@ seguinte tentar o mesmo intervalo: ela recoleta o que já tem, sem duplicar (a c
 releitura; o ganho é que a falta deixa de ser permanente e passa a ser visível a cada
 execução, até alguém agir.
 
-O item 3 só é necessário para janelas grandes demais para caber num teto razoável.
-Enquanto a janela for de 90 dias, elevar `limite_paginas` resolve.
+#### O backfill em janelas
+
+Feito em 2026-08-24. O texto anterior desta seção dizia que elevar `limite_paginas`
+resolveria enquanto a janela fosse de 90 dias. Resolve o sintoma e deixa o mecanismo
+intacto: o teto continua sendo quem decide quanto histórico se perde, e continua decidindo
+em silêncio. Elevar o teto só empurra a fronteira para mais longe.
+
+Com `until`, uma coleta de 90 dias vira treze chamadas de sete dias. Cada uma devolve um
+volume que cabe no teto com folga: o repositório mais ativo do escopo faz cerca de 64
+commits por dia, ou 450 por janela, que são cinco páginas de 100.
+
+O ganho não é caber. É que o teto deixa de ser a variável que determina o resultado. Uma
+janela que estourar 100 páginas é sinal de atividade anômala, não de configuração
+apertada.
+
+Duas consequências precisaram de código:
+
+| Consequência | Tratamento |
+|---|---|
+| `since` e `until` são inclusivos | O registro exatamente na borda vem nas duas janelas vizinhas. A coleta deduplica pela chave natural antes de gravar, para a contagem da carga não mentir |
+| Uma janela truncada trunca a coleta inteira | Seria possível avançar o watermark até o início da janela que falhou. O ganho seria evitar releitura idempotente; o custo seria um watermark avançando sobre coleta incompleta, que é exatamente a troca que causou o defeito original |
+
+No regime normal nada disso pesa. Com watermark de um dia atrás, `janelas` devolve um único
+intervalo e a coleta faz uma chamada, como antes. O fatiamento só aparece na primeira carga
+e nas recuperações.
+
+#### Onde o `until` não existe
+
+A API não oferece `until` em todos os endpoints. `/commits` aceita; `/issues` não, e só
+expõe `since`.
+
+Isso é relevante porque o plano da Etapa 6 supunha que o backfill em janelas serviria para
+issues também. Não serve. Lá o teto de páginas é neutralizado por ordenação: com
+`sort=updated&direction=asc`, a lista começa pelo registro mais antigo depois do watermark e
+caminha para frente, então o corte pelo teto descarta os mais recentes, que são justamente os
+que a execução seguinte vai buscar. A coleta converge sem nunca deixar buraco atrás de si.
+
+São dois remédios para o mesmo defeito, e qual serve depende do que a API oferece. O
+`Endpoint` declara isso em `aceita_until`, em vez de a coleta supor.
+
+#### A mesma regra, dois defeitos opostos
+
+A correção do item 2 diz que o watermark não avança quando a coleta é truncada. Aplicada à
+coleta crescente, ela vira o defeito que deveria evitar.
+
+| Sentido | O que o teto cortou | Não avançar o watermark |
+|---|---|---|
+| decrescente (`/commits`) | está atrás | correto: a execução seguinte tenta o mesmo intervalo até completar |
+| crescente (`/issues`) | está à frente | **defeito**: repete as mesmas primeiras páginas para sempre e o backfill nunca termina |
+
+Uma regra escrita para um sentido de coleta não é uma regra sobre truncagem, e sim sobre
+aquele sentido. `proximo_checkpoint` passou a receber o endpoint.
+
+O valor de `status='truncado'` continua sendo gravado nos dois casos, porque ele diz que a
+carga ficou incompleta, e isso é verdade nos dois. O que muda é o que fazer em seguida.
+
+A consequência boa disso é que a primeira carga de issues é um backfill retomável: sem
+`since`, a coleta começa na issue mais antiga do repositório, e se o teto interromper, a
+execução seguinte continua de onde parou.
+
+### 5.8 O campo que sustenta o watermark
+
+O watermark é calculado a partir de `campo_data`, declarado no `Endpoint`, e vira o `since`
+da execução seguinte. Daí sai um contrato que não é óbvio:
+
+> `campo_data` precisa ser o mesmo campo pelo qual a API filtra em `since`.
+
+Em `/commits` os dois coincidem sem esforço, e é por isso que o contrato passou despercebido
+até aqui. Em `/issues` não coincidem: o `since` filtra por `updated_at`, não pela data de
+criação. Configurar `campo_data` como `created_at`, por analogia com commits, faria o
+marcador andar num ritmo e o filtro em outro, e a coleta deixaria de convergir sem nenhum
+erro aparecer.
+
+O contrato está escrito no campo e coberto por teste, porque a próxima pessoa a acrescentar
+um endpoint vai copiar o que já existe.
 
 ---
 
@@ -479,14 +552,22 @@ Cada tabela fato declara seu grão explicitamente, em comentário no código e n
 
 ### 6.2 Os três tipos de fato
 
-Kimball define três tipos de tabela fato. Este projeto usa os três, o que é incomum em portfólio
-e diferencial em entrevista.
+Kimball define três tipos de tabela fato, e cada um responde a uma classe diferente de
+pergunta. Os três estão construídos.
 
 | Tipo | Tabela | Grão | Comportamento |
 |---|---|---|---|
 | Transação | `fct_commit` | um commit | Evento pontual e imutável. Só insere |
 | Snapshot periódico | `fct_repo_snapshot` | um repositório por dia | Retrato de métricas num instante: stars, forks, issues abertas |
-| Snapshot acumulado | `fct_issue` | uma issue, com marcos | `aberta_em` → `primeira_resposta_em` → `fechada_em`. A linha é atualizada conforme o processo avança |
+| Snapshot acumulado | `fct_issue` | uma issue, com marcos | `aberta_em` → `fechada_em`. A linha muda conforme o processo avança |
+
+O snapshot acumulado ficou por último porque é o único cuja linha muda depois de criada. Os
+outros dois só inserem.
+
+`fct_issue` tem dois marcos e não três. `primeira_resposta_em` exigiria o endpoint de
+comentários, que não vem neste payload, e dois marcos já tornam a linha mutável, que é a
+característica que define o tipo. O terceiro entra sem alterar o grão quando o endpoint
+entrar.
 
 ### 6.3 A decisão contraintuitiva: onde ficam as stars
 
@@ -596,6 +677,57 @@ erDiagram
     DIM_AUTOR       ||--o{ FCT_ISSUE : referencia
     DIM_TEMPO       ||--o{ FCT_ISSUE : referencia
 ```
+
+Todo o diagrama existe na camada gold. `DIM_AUTOR` aparece ligada a dois fatos, e é isso que
+a torna uma dimensão conformada, tratada na seção 6.7.
+
+### 6.7 Dimensão conformada: `dim_autor` serve a dois fatos
+
+A dimensão nasceu lendo só a silver de commits, o que estava certo enquanto `fct_commit` era o
+único fato que apontava para ela. `fct_issue` quebrou essa suposição.
+
+Quem abre issue nem sempre commita. Construindo `dim_autor` só de commits, todo relator
+externo cairia no membro desconhecido, e a pergunta da seção 2.3 sobre concentração de
+manutenção perderia justamente a parte de fora do núcleo. O fato apontaria para uma dimensão
+tecnicamente íntegra e analiticamente vazia.
+
+Dimensão conformada é a que serve a todos os fatos que a referenciam, não a que nasceu junto
+com o primeiro deles. `montar_dim_autor` passou a receber as duas silvers.
+
+**A chave sobrevive à junção.** Nos commits a chave é híbrida, `github_id` quando existe e
+`autor_email` quando não. Nas issues só a chave por conta existe, porque o payload não traz
+e-mail. Como a origem da chave entra no hash, a pessoa que commita e abre issue continua
+sendo uma linha só.
+
+**O atributo mais recente não é o mais completo.** O payload de issue não tem nome nem e-mail
+do git. Escolher os atributos pela linha mais recente faria um autor perder identidade por
+ter aberto uma issue depois do último commit. A escolha passou a ser por atributo, e não por
+linha: o valor mais recente que não seja nulo.
+
+Isso obrigou a mudar a ordem de duas operações, e a mudança é a lição da entrada 24 do
+diário.
+
+### 6.8 O snapshot acumulado que não precisou de mecanismo de escrita
+
+O snapshot acumulado é, na literatura, o mais caro dos três. A linha existe desde a abertura
+do processo e sofre `UPDATE` a cada marco que avança, o que normalmente exige `MERGE` com
+lógica de atualização parcial e estado guardado entre execuções.
+
+Aqui não exigiu nada disso, e o motivo é o acúmulo de três decisões anteriores:
+
+| Decisão | Onde foi tomada | O que ela paga aqui |
+|---|---|---|
+| Chave substituta determinística, por hash | 6.5 | reconstruir gera a mesma chave, então os fatos continuam válidos |
+| Gold reconstruída por `overwrite` | 5.3 da Etapa 4 | não há estado a manter entre execuções |
+| Silver de issues no grão do estado corrente | 10.9 | o `UPDATE` já aconteceu antes, na camada de baixo |
+
+O `UPDATE` que o tipo de fato exige acontece por reconstrução. `montar_fct_issue` é uma
+projeção pura da silver, e rodar duas vezes sobre o mesmo dado dá o mesmo resultado.
+
+O que não é reprodutível, e de propósito, é `dias_em_aberto`. Ela mede a idade do processo,
+`fechada_em` quando existe e o instante da execução quando não, então uma issue aberta tem
+número maior a cada execução e uma issue fechada congela. É a medida que caracteriza o tipo:
+num fato de transação nenhuma coluna se comporta assim.
 
 ---
 
@@ -860,6 +992,44 @@ job diário coletou às 9h e o pipeline coletou de novo no mesmo dia, e mesmo as
 duas fotos. A chave `(repo, dt)` da bronze colapsou as duas coletas numa linha, que é
 exatamente o que o grão de um repositório por dia exige.
 
+### 8.11 Integração contínua: o job que prova o que o documento afirma
+
+A suíte roda no GitHub Actions a cada push e pull request. Isso é o mínimo, e não é o
+interessante.
+
+O interessante é a divisão dos grupos de dependência. `python-dotenv` saiu das dependências de
+execução, onde estava por engano, e foi para um grupo `test`; `pyspark` ficou sozinho no grupo
+`dev`. O primeiro job instala só `.[test]`, o que significa **rodar a suíte rápida numa
+máquina sem pyspark**.
+
+Isso transforma uma afirmação em verificação.
+
+A decisão 8.1 mantém a lógica em `src/` e não nos notebooks, e a justificativa é que assim ela
+pode ser testada sem motor. A decisão 8.5 injeta o `spark` como parâmetro e mantém os imports
+de pyspark dentro das funções, pelo mesmo motivo. Até aqui as duas eram afirmações do
+documento: a máquina de desenvolvimento sempre teve pyspark instalado, então nada exercia a
+promessa. Um import de pyspark que subisse ao topo de um módulo passaria despercebido.
+
+Agora não passa. E existe um passo dedicado que falha se pyspark entrar no grupo `test`, senão
+a invariante se perderia em silêncio no dia em que alguém movesse a dependência de lugar.
+
+| Job | Instala | Cobre | Prova além disso |
+|---|---|---|---|
+| `rápidos` | `.[test]` | 294 casos, sem JVM | os módulos importam sem o motor |
+| `com Spark` | `.[dev]` | 145 casos, com JVM | o comportamento do motor, num Linux limpo |
+
+O job rápido roda em Python 3.10 e 3.12, os extremos do que o `pyproject.toml` declara em
+`requires-python`. Sem isso, o intervalo declarado seria mais uma afirmação não exercida.
+
+Duas escolhas menores, pelo mesmo princípio de não deixar decisão implícita. A versão do Java
+entra declarada no job, em vez de ser a que o runner tiver hoje. E `concurrency` com
+`cancel-in-progress` cancela a execução anterior quando chega um push novo, porque o que
+interessa é o estado do último commit, não a fila.
+
+Um efeito colateral bem-vindo: os testes que leem arquivo pelo Spark são pulados na máquina do
+autor quando falta `winutils.exe`, e no Linux do runner não há esse problema. A cobertura real
+da suíte com JVM é maior na CI do que localmente.
+
 ---
 
 ## 9. Diário de bordo
@@ -928,6 +1098,23 @@ O grupo mais caro do projeto. Nos três casos o pipeline reportou sucesso.
 | 19 | Depois de corrigido e enviado, o mesmo erro por três rodadas | O `git pull` chegou, o `restartPython()` não. E o diagnóstico usado para descartar essa hipótese estava errado: `inspect.getsource(modulo)` lê o arquivo em disco, não o objeto carregado | Escolha a ferramenta que observa o que você quer saber. Para saber o que está em execução, pergunte à memória: `hasattr(modulo, "SIMBOLO_NOVO")`. A pergunta feita ao alvo errado devolve uma resposta verdadeira e inútil, e custou três tentativas de correção às cegas |
 | 20 | `[FALHA] 3. merge dos aprovados: AttributeError`, lido como defeito no `MERGE` | Uma célula de diagnóstico temporária, escrita duas versões antes, chamava função que a refatoração havia removido. O `MERGE` nunca chegou a executar | `try/except` com rótulo próprio descreve a sua intenção, não o que falhou. O rótulo apareceu colado a um erro ocorrido antes do merge. Andaime de diagnóstico tem prazo de validade: apague quando o diagnóstico terminar |
 
+### 9.6 Encontrados ao preparar a Etapa 6
+
+Nenhum dos dois veio de execução. Apareceram ao ler o código que o endpoint novo iria usar.
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 21 | `TypeError: can't compare offset-naive and offset-aware datetimes` ao fatiar a janela de coleta | O watermark lido da tabela de controle pode voltar sem fuso; o `momento` da execução sempre tem. O código novo pôs os dois frente a frente pela primeira vez | Fronteira de persistência não devolve o que você guardou, e sim o que o formato de armazenamento sabe representar. A normalização virou uma função só, `em_utc`, em vez de ficar repetida em cada comparação. Quem pegou foi um teste antigo, escrito para a ingestão incremental e não para fuso |
+| 22 | `reconciliar_silver(spark, endpoint)` lia sempre as tabelas de commits | A função recebia o endpoint e o usava só para contar a origem. O destino estava fixo no corpo. Enquanto o único chamador foi o notebook de commits, os números fecharam | Assinatura que promete generalidade sem entregar é defeito latente, e o teste que o pegaria é o que exercita o segundo caso. O conserto transformou o destino em declaração por endpoint, e endpoint não declarado agora levanta: reconciliar contra tabela nenhuma aprovaria qualquer coisa |
+
+### 9.7 Encontrados na Etapa 6
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 23 | Regra de truncagem correta virando defeito no endpoint novo | Não avançar o watermark quando a coleta é truncada supõe entrega do mais novo para o mais antigo. Em `/issues`, que é coletado em ordem crescente, o que o teto cortou está à frente, e preservar o watermark faria a coleta repetir as mesmas primeiras páginas para sempre | A regra tinha sido escrita para um sentido de coleta e enunciada como se fosse sobre truncagem. Quando a suposição implícita deixou de valer, a mesma regra produziu o defeito oposto ao que evitava. Vale desconfiar de regra que só foi exercitada num caso: o segundo caso é que revela o que ela realmente diz |
+| 24 | `qtd_rotulos` valendo `-1` numa issue sem rótulos, com guarda escrita | `size(NULL)` devolve `-1` em modo legado, e não `NULL`. A guarda usava `coalesce`, que só age sobre `NULL`, então nunca disparou | A entrada 10 já registrava esse comportamento, e mesmo assim a guarda saiu errada, porque foi escrita contra a intuição do defeito e não contra o defeito. Conhecer a armadilha não protege se a proteção mira outra coisa. O que pegou foi o teste que exercitava a ausência do campo, e não a leitura do código |
+| 25 | `first(coluna, ignorenulls=True)` devolvendo `NULL` sobre partição que tinha valor | A função de janela estava no `select` depois do `where` que reduzia a partição a uma linha. O `ignorenulls` procurava em uma linha só, que era justamente a nula | Função de janela enxerga o que existe no momento em que ela é avaliada, não a partição original. Ordem de operações em DataFrame não é detalhe de estilo: filtrar antes de janelar muda o resultado sem mudar o código da janela |
+
 ---
 
 ## 10. Roadmap e manutenção
@@ -942,8 +1129,8 @@ O grupo mais caro do projeto. Nos três casos o pipeline reportou sucesso.
 | 3 | Camada silver | Tipagem, dedupe, normalização, testes de qualidade | ✅ concluída |
 | 4 | Gold: dimensões | Star schema, SCD2, chaves substitutas | ✅ concluída |
 | 5 | Gold: `fct_commit` e `fct_repo_snapshot` | Fato de transação, snapshot periódico, aditividade | ✅ concluída |
-| 6 | Endpoint `issues` + `fct_issue` | Snapshot acumulado, backfill em janelas | ⏳ próxima |
-| 7 | CI, orquestração, README | GitHub Actions, Databricks Workflows, documentação | ☐ |
+| 6 | Endpoint `issues` + `fct_issue` | Snapshot acumulado, dimensão conformada, coleta convergente sem `until` | ✅ concluída |
+| 7 | CI | GitHub Actions, grupos de dependência, matriz de versões | ✅ concluída |
 
 ### 10.2 Detalhe da Etapa 1 (concluída)
 
@@ -1120,9 +1307,9 @@ no próprio log, que esta tabela não tem caminho de `UPDATE`.
 | 5.3 | Vigência da SCD2 aberta para trás |
 | 5.4 | Bateria dos fatos: grão e integridade referencial |
 
-O escopo cobre dois dos três tipos de fato. O terceiro, o snapshot acumulado, exige
-endpoint novo, backfill em janelas e um tipo de fato que ainda não tínhamos usado; por isso
-virou a Etapa 6.
+O escopo cobre os dois tipos de fato que só inserem. O snapshot acumulado, declarado na
+seção 6.2, exige endpoint novo, backfill em janelas e um fato cuja linha é atualizada; por
+isso virou a Etapa 6.
 
 As três lições de aditividade estão declaradas no comentário de cada coluna, já que nada no
 SQL as impõe:
@@ -1283,7 +1470,91 @@ dado novo, e sim de escolhas que ficaram visíveis porque o modelo dimensional a
 consulta direta sobre a silver elas estariam embutidas, e a resposta errada não teria como
 ser questionada.
 
-### 10.7 Convenção de mensagens de commit
+### 10.7 Detalhe da Etapa 6 (concluída)
+
+| Sub-passo | Entrega |
+|---|---|
+| 6.1 | Endpoint `issues`, com coleta crescente e truncagem que avança o watermark |
+| 6.2 | Bronze como log de versões, com `dt` na chave |
+| 6.3 | `silver_issues`, três destinos, grão `(repo, numero)` |
+| 6.4 | `dim_autor` conformada entre os dois fatos |
+| 6.5 | `fct_issue`, snapshot acumulado com dois marcos |
+| 6.6 | Bateria de issues e dos fatos, notebook `10` e tarefa no job |
+
+#### Os pré-requisitos, corrigidos antes
+
+Três correções no código existente, todas nascidas de ler o que o endpoint novo iria usar.
+Valem por si, independentemente da Etapa 6.
+
+| Correção | Onde | Por quê |
+|---|---|---|
+| Backfill em janelas com `until` | `ingestao.janelas`, `controle.parametros_de_janela` | Era o item 3 pendente da seção 5.7. O teto de páginas deixa de decidir quanto histórico se perde |
+| Contrato do campo que sustenta o watermark | `Endpoint.campo_data` | Seção 5.8. É onde a Etapa 6 erraria em silêncio, porque o `since` de `/issues` filtra por `updated_at` |
+| Destino da silver por endpoint | `qualidade.DESTINOS_SILVER` | A reconciliação lia sempre as tabelas de commits. Diário 22 |
+
+Junto delas, `silver_comum.py` recolheu o que `silver_repositorios` já importava de
+`silver.py`. O módulo da silver de commits tinha virado biblioteca compartilhada sem que o
+nome dissesse isso, e um terceiro endpoint tornaria a confusão permanente.
+
+#### As quatro decisões, e o que cada uma custou
+
+**A janela de coleta.** A pergunta central é quais ferramentas estão morrendo, e a assinatura
+disso é backlog velho: issues abertas há muito tempo que ninguém toca. Como `since` filtra por
+`updated_at`, uma janela de 90 dias exclui estruturalmente esse sinal. A coleta é completa na
+primeira carga, sem `since`, o que custa uma vez o backfill do estoque e depois roda
+incremental.
+
+O tamanho do backlog já existia em `fct_repo_snapshot`, na medida `issues_abertas`. O que a
+coleta completa acrescenta é o detalhe por issue: distribuição de idade, quem abriu, há
+quanto tempo está aberta.
+
+**Onde filtrar os pull requests.** O `/issues` devolve PRs misturados, porque um PR é uma
+issue com um campo a mais. A seção 4.4 declara a bronze como cópia fiel do endpoint, então
+filtrar antes dela contraria o contrato escrito. A silver separa.
+
+**O que fazer com eles.** Tabela própria, e não descarte contado. PR não é lixo do endpoint:
+num projeto de engenharia de dados, tempo até merge e volume de PR externo dizem tanto sobre
+saúde quanto issue, e o dado já chega no mesmo payload, sem requisição extra. A decisão
+custou um terceiro balde na reconciliação e deixou a porta aberta para um `fct_pull_request`
+sem coletar nada novo.
+
+**O grão da silver.** Uma linha por issue, com a versão mais recente vencendo. É o que faz a
+gold virar projeção pura, tratado na seção 6.8. A alternativa, guardar todas as versões,
+daria auditoria de mudança de estado ao custo de janela na gold, e não responde nenhuma
+pergunta da seção 2.3.
+
+#### O que a bronze de issues tem de diferente
+
+É a primeira tabela bronze que guarda mais de uma linha por entidade. A chave inclui `dt`,
+então cada dia de coleta acrescenta a versão daquele dia, e a camada continua sendo só
+inserção, sem ramo de `UPDATE`.
+
+Isso quebrou uma suposição da reconciliação. `bronze = soma dos destinos da silver` só vale
+quando linha e entidade são a mesma coisa. Com log de versões a relação é N para um, e contar
+linha dos dois lados acusaria perda proporcional a quantas vezes as issues foram atualizadas.
+A contagem da origem passou a ser por entidade distinta quando o endpoint é mutável.
+
+A mesma distinção mudou a deduplicação da bronze: ela mantinha a ocorrência mais antiga, o
+que é correto para commit, que é imutável, e congelaria a issue no estado em que foi vista
+primeiro.
+
+### 10.8 Detalhe da Etapa 7 (concluída)
+
+| Sub-passo | Entrega |
+|---|---|
+| 7.1 | Grupos de dependência separados: `test` sem pyspark, `dev` com |
+| 7.2 | `.github/workflows/testes.yml`, dois jobs |
+| 7.3 | Matriz de Python nos extremos do intervalo declarado |
+| 7.4 | Selo no README |
+
+A decisão que sustenta o resto está em 8.11: instalar sem pyspark faz o job provar uma
+invariante da arquitetura, e não apenas rodar testes.
+
+Junto dela saiu uma correção pendente havia semanas. `python-dotenv` estava declarado como
+dependência de execução e é usado só pelo `conftest.py`, para ler o `HADOOP_HOME` da máquina.
+No Databricks ele era instalado sem necessidade; a separação dos grupos resolveu de passagem.
+
+### 10.9 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -1296,7 +1567,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.8 Regras de manutenção deste documento
+### 10.10 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8. Registre
@@ -1305,17 +1576,26 @@ Conventional Commits:
 4. Se uma decisão for revertida, não apague: registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.9 Melhorias planejadas
+### 10.11 Melhorias planejadas
 
-Viram commits de evolução, e essa evolução fica visível no histórico:
+Três itens desta lista saíram porque foram feitos: a truncagem visível com recuperação do
+histórico (seção 5.7), o Secret Scope (8.7) e o GitHub Actions (8.11). O que resta:
 
-- Tornar a truncagem por `limite_paginas` visível e recuperar o histórico perdido
-  (seção 5.7). É a única pendência que afeta a completude do dado
-- Migrar a leitura do token para Databricks Secret Scope
-- GitHub Actions rodando `pytest` a cada push e PR
-- Concorrência controlada na ingestão (vários repositórios em paralelo, respeitando quota)
-- Adicionar `dbt` sobre a camada gold, para exercitar analytics engineering
-- Publicar a documentação de linhagem gerada pelo Unity Catalog
+**Com dado já coletado, faltando só modelagem.** Os pull requests estão na silver desde a
+Etapa 6, separados das issues, e ninguém os consulta ainda. Um `fct_pull_request` sairia sem
+nenhuma requisição nova, e tempo até merge é indicador de saúde tão bom quanto issue parada.
+
+**Exigindo endpoint novo.** O marco `primeira_resposta_em` de `fct_issue`, que hoje não existe
+porque o payload da issue não o traz. O caminho barato é
+`/repos/{repo}/issues/comments?since=`, uma lista paginada por repositório de onde se agrega o
+mínimo por issue, e não uma requisição por issue.
+
+**De infraestrutura.** Concorrência controlada na ingestão, com vários repositórios em
+paralelo respeitando a quota. É a mudança com melhor retorno em tempo de execução, e a que
+mais arrisca a quota se for feita sem cuidado.
+
+**De escopo profissional.** `dbt` sobre a camada gold, para exercitar analytics engineering, e
+publicar a linhagem que o Unity Catalog já gera.
 
 ---
 

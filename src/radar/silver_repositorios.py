@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from radar import bronze, controle, silver
+from radar import bronze, controle, silver_comum
 from radar.config import SILVER, fqn
 from radar.ingestao import Endpoint
 
@@ -137,21 +137,21 @@ def tipar(df, momento: datetime):
         F.col("repo"),
         F.col("dt"),
         dados["id"].alias("repo_id"),
-        silver._texto(dados["full_name"]).alias("nome_completo"),
-        silver._texto(dono["login"]).alias("dono"),
+        silver_comum.texto(dados["full_name"]).alias("nome_completo"),
+        silver_comum.texto(dono["login"]).alias("dono"),
         dono["id"].alias("dono_id"),
-        silver._categoria(dono["type"]).alias("dono_tipo"),
-        silver._texto(dados["description"]).alias("descricao"),
-        silver._texto(dados["language"]).alias("linguagem"),
+        silver_comum.categoria(dono["type"]).alias("dono_tipo"),
+        silver_comum.texto(dados["description"]).alias("descricao"),
+        silver_comum.texto(dados["language"]).alias("linguagem"),
         # SPDX ja e identificador padronizado; normalizar so a caixa evita
         # `MIT` e `mit` virarem duas licencas.
-        silver._categoria(dados["license"]["spdx_id"]).alias("licenca"),
-        silver._texto(dados["default_branch"]).alias("branch_padrao"),
+        silver_comum.categoria(dados["license"]["spdx_id"]).alias("licenca"),
+        silver_comum.texto(dados["default_branch"]).alias("branch_padrao"),
         dados["archived"].alias("arquivado"),
         dados["fork"].alias("e_fork"),
-        silver._instante(dados["created_at"]).alias("criado_em"),
-        silver._instante(dados["updated_at"]).alias("atualizado_em"),
-        silver._instante(dados["pushed_at"]).alias("push_em"),
+        silver_comum.instante(dados["created_at"]).alias("criado_em"),
+        silver_comum.instante(dados["updated_at"]).alias("atualizado_em"),
+        silver_comum.instante(dados["pushed_at"]).alias("push_em"),
         dados["stargazers_count"].cast("int").alias("stars"),
         dados["forks_count"].cast("int").alias("forks"),
         dados["open_issues_count"].cast("int").alias("issues_abertas"),
@@ -179,7 +179,7 @@ def carregar(spark, endpoint: Endpoint, momento: datetime) -> ResultadoRepositor
     processo = f"{endpoint.nome}@silver"
 
     anterior = controle.ler(spark, origem, processo)
-    novos = silver.filtrar_novos(spark.table(origem), anterior)
+    novos = silver_comum.filtrar_novos(spark.table(origem), anterior)
     tipado = tipar(novos, momento)
 
     medida = tipado.select(

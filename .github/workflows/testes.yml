@@ -1,0 +1,102 @@
+# Suite de testes a cada push e pull request.
+#
+# Dois jobs, e a separacao nao e so de tempo. O primeiro instala `.[test]`, que
+# nao traz pyspark, e por isso prova uma invariante que nenhum teste local
+# alcanca: os modulos de `src/radar` seguem importaveis sem o motor. E a
+# premissa da decisao 8.1, que mantem a logica fora dos notebooks, e ate agora
+# ela era so uma afirmacao do documento.
+
+name: testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Push seguido de push cancela a execucao anterior: o interessante e o estado
+# do ultimo commit, nao a fila.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# A suite nao escreve em lugar nenhum.
+permissions:
+  contents: read
+
+jobs:
+  rapidos:
+    name: rápidos (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Uma versao falhar nao esconde o resultado da outra.
+      fail-fast: false
+      matrix:
+        # Os dois extremos do que o `pyproject.toml` declara suportar. Sem
+        # isto, `requires-python = ">=3.10"` seria uma afirmacao nao exercida.
+        python: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar sem o motor
+        run: python -m pip install -e ".[test]"
+
+      - name: Confirmar que pyspark nao esta presente
+        # Se ele entrar no grupo `test` por descuido, o job seguinte continuaria
+        # verde e a invariante teria sido perdida em silencio.
+        run: |
+          python - <<'EOF'
+          import importlib.util
+          assert importlib.util.find_spec("pyspark") is None, (
+              "pyspark instalado no grupo `test`: este job deixa de provar "
+              "que os modulos importam sem o motor"
+          )
+          EOF
+
+      - name: Importar todo o pacote sem pyspark
+        run: |
+          python -c "
+          from radar import (
+              bronze, controle, github_client, gold, ingestao, qualidade,
+              silver, silver_comum, silver_issues, silver_repositorios,
+          )
+          "
+
+      - name: Suíte rápida
+        run: python -m pytest -m "not spark"
+
+  spark:
+    name: com Spark
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Spark roda na JVM, e a versao entra declarada em vez de herdada do
+      # que o runner tiver hoje.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar com o motor
+        run: python -m pip install -e ".[dev]"
+
+      # `winutils.exe` e problema de Windows: em Linux a leitura de arquivo
+      # local pelo Spark funciona sem nada a mais, entao os testes que o
+      # `hadoop` pula na maquina do autor rodam aqui.
+      - name: Suíte com JVM
+        run: python -m pytest -m spark

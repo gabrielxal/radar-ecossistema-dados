@@ -175,8 +175,22 @@ COMMENT 'Autores de commit. SCD1: o valor mais recente substitui o anterior.'
 """
 
 
-def montar_dim_autor(commits, momento: datetime):
-    """Uma linha por autor, a partir da silver de commits.
+# Forma comum dos candidatos a linha da dimensao, venham de que fato vierem.
+COLUNAS_CANDIDATO = (
+    "chave_natural",
+    "origem_da_chave",
+    "github_id",
+    "github_login",
+    "github_tipo",
+    "autor_nome",
+    "autor_email",
+    "_instante",
+    "_desempate",
+)
+
+
+def candidatos_de_commits(commits):
+    """Autores vistos na silver de commits, na forma comum.
 
     Chave hibrida: `github_id` quando existe, `autor_email` quando nao.
     Nenhum dos dois e chave natural limpa: `github_id` falta em 1,4% dos
@@ -186,12 +200,7 @@ def montar_dim_autor(commits, momento: datetime):
     A seguranca disso depende de nenhum e-mail aparecer resolvido em um
     commit e nao resolvido noutro: seria a mesma pessoa em duas linhas. Foi
     medido (zero ocorrencias) e virou verificacao bloqueante da bateria.
-
-    SCD1: o commit mais recente define os atributos. O projeto pergunta
-    sobre atividade, nao sobre historico de nomes, e versionar `login` seria
-    complexidade sem demanda.
     """
-    from pyspark.sql import Window
     from pyspark.sql import functions as F
 
     chave = F.coalesce(F.col("github_id").cast("string"), F.col("autor_email"))
@@ -199,20 +208,98 @@ def montar_dim_autor(commits, momento: datetime):
         F.lit(ORIGEM_EMAIL)
     )
 
-    base = (
-        commits.where(chave.isNotNull())
-        .withColumn("chave_natural", chave)
-        .withColumn("origem_da_chave", origem)
+    return commits.where(chave.isNotNull()).select(
+        chave.alias("chave_natural"),
+        origem.alias("origem_da_chave"),
+        F.col("github_id"),
+        F.col("github_login"),
+        F.col("github_tipo"),
+        F.col("autor_nome"),
+        F.col("autor_email"),
+        # Desempate por `sha` para a escolha nao depender da ordem de leitura
+        # quando dois commits do mesmo autor tem o mesmo instante.
+        F.col("commitado_em").alias("_instante"),
+        F.col("sha").alias("_desempate"),
     )
 
-    # Desempate por `sha` para a escolha nao depender da ordem de leitura
-    # quando dois commits do mesmo autor tem o mesmo instante.
-    janela = Window.partitionBy("chave_natural").orderBy(
-        F.col("commitado_em").desc(), F.col("sha").asc()
+
+def candidatos_de_issues(issues):
+    """Autores vistos na silver de issues, na forma comum.
+
+    So a chave por conta existe aqui: o payload de issue nao traz e-mail. Quem
+    abre issue sem conta do GitHub nao existe, ao contrario de quem commita.
+
+    Nome e e-mail vem nulos de proposito, e nao vazios. A escolha do atributo
+    ignora nulo, entao um autor que tambem commita mantem o nome que o commit
+    trouxe, em vez de perde-lo por ter aberto uma issue mais recentemente.
+    """
+    from pyspark.sql import functions as F
+
+    chave = F.col("autor_id").cast("string")
+
+    return issues.where(chave.isNotNull()).select(
+        chave.alias("chave_natural"),
+        F.lit(ORIGEM_CONTA).alias("origem_da_chave"),
+        F.col("autor_id").alias("github_id"),
+        F.col("autor_login").alias("github_login"),
+        F.col("autor_tipo").alias("github_tipo"),
+        F.lit(None).cast("string").alias("autor_nome"),
+        F.lit(None).cast("string").alias("autor_email"),
+        F.col("atualizada_em").alias("_instante"),
+        F.concat_ws("#", F.col("repo"), F.col("numero")).alias("_desempate"),
     )
+
+
+def montar_dim_autor(commits, momento: datetime, issues=None):
+    """Uma linha por autor, conformada entre os fatos que a referenciam.
+
+    A dimensao nasceu so de commits, e ficaria errada assim. `fct_issue`
+    aponta para ela, e quem abre issue nem sempre commita: sem os autores de
+    issue aqui, todo relator externo cairia no membro desconhecido e a
+    pergunta sobre concentracao de manutencao perderia justamente a parte de
+    fora do nucleo. Dimensao conformada e a que serve a todos os fatos que a
+    referenciam, nao a que nasceu junto com o primeiro deles.
+
+    A chave por conta e a mesma nos dois lados, entao a pessoa que commita e
+    abre issue continua sendo uma linha so.
+
+    SCD1: a atividade mais recente define os atributos. O projeto pergunta
+    sobre atividade, nao sobre historico de nomes, e versionar `login` seria
+    complexidade sem demanda.
+    """
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
+    base = candidatos_de_commits(commits)
+    if issues is not None:
+        base = base.unionByName(candidatos_de_issues(issues))
+
+    ordem = Window.partitionBy("chave_natural").orderBy(
+        F.col("_instante").desc(), F.col("_desempate").asc()
+    )
+    # Moldura completa: sem ela `first` enxerga so ate a linha corrente, e na
+    # primeira linha isso e a propria linha, o que anularia o `ignorenulls`.
+    todas = ordem.rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing)
+
+    # A escolha do atributo acontece antes do filtro, e a ordem importa: uma
+    # funcao de janela avaliada depois do `where` enxergaria so a linha que
+    # sobrou, e o `ignorenulls` nao teria onde procurar.
+    ATRIBUTOS = (
+        "github_id",
+        "github_login",
+        "github_tipo",
+        "autor_nome",
+        "autor_email",
+    )
+
+    escolhido = base
+    for coluna in ATRIBUTOS:
+        escolhido = escolhido.withColumn(
+            coluna, F.first(F.col(coluna), ignorenulls=True).over(todas)
+        )
 
     return (
-        base.withColumn("_ordem", F.row_number().over(janela))
+        escolhido.withColumn("_ordem", F.row_number().over(ordem))
         .where(F.col("_ordem") == 1)
         .select(
             chave_substituta(
@@ -220,11 +307,7 @@ def montar_dim_autor(commits, momento: datetime):
             ).alias("sk_autor"),
             F.col("chave_natural"),
             F.col("origem_da_chave"),
-            F.col("github_id"),
-            F.col("github_login"),
-            F.col("github_tipo"),
-            F.col("autor_nome"),
-            F.col("autor_email"),
+            *[F.col(c) for c in ATRIBUTOS],
             F.lit(momento).cast("timestamp").alias("_processado_em"),
         )
     )
@@ -616,6 +699,123 @@ def montar_fct_repo_snapshot(repositorios_silver, dim_repositorio, momento: date
     )
 
 
+# --------------------------------------------------------------------------
+# fct_issue: fato de snapshot acumulado
+# --------------------------------------------------------------------------
+
+TABELA_FCT_ISSUE = fqn(GOLD, "fct_issue")
+
+COLUNAS_FCT_ISSUE = (
+    "numero",
+    "sk_repositorio",
+    "sk_autor",
+    "sk_data_abertura",
+    "sk_data_fechamento",
+    "esta_aberta",
+    "motivo_estado",
+    "comentarios",
+    "qtd_rotulos",
+    "qtd_responsaveis",
+    "dias_em_aberto",
+    "dias_ate_fechar",
+    "_processado_em",
+)
+
+
+def ddl_fct_issue() -> str:
+    """DDL do fato de issues.
+
+    Grao: uma issue. Terceiro e ultimo tipo de fato de Kimball, e o unico cuja
+    linha muda depois de criada: os marcos avancam conforme o processo anda, e
+    `dias_em_aberto` cresce a cada execucao ate o fechamento congelar o valor.
+
+    Duas colunas de marco, e nao tres. `primeira_resposta_em` exigiria o
+    endpoint de comentarios, que nao vem neste payload. Dois marcos ja tornam
+    a linha mutavel, que e a caracteristica que define o tipo; o terceiro
+    entra sem alterar o grao quando o endpoint entrar.
+
+    Nao ha mecanismo de escrita proprio. A gold inteira e reconstruida por
+    `overwrite` a partir de chaves determinadas por hash, e a silver ja
+    guarda uma linha por issue no estado corrente, entao o UPDATE que este
+    tipo de fato normalmente exige acontece por reconstrucao.
+    """
+    return f"""
+CREATE TABLE IF NOT EXISTS {TABELA_FCT_ISSUE} (
+    numero             INT       NOT NULL COMMENT 'DIMENSAO DEGENERADA: numero da issue no repositorio',
+    sk_repositorio     STRING    NOT NULL COMMENT 'versao vigente na abertura, nao a versao de hoje',
+    sk_autor           STRING    NOT NULL COMMENT 'quem abriu; membro desconhecido quando nao resolve',
+    sk_data_abertura   INT       NOT NULL COMMENT 'MARCO 1 de dim_tempo: quando a issue foi aberta',
+    sk_data_fechamento INT                COMMENT 'MARCO 2 de dim_tempo: NULL enquanto o processo nao termina',
+    esta_aberta        BOOLEAN            COMMENT 'ADITIVA como contagem: quantas seguem em aberto',
+    motivo_estado      STRING             COMMENT 'como terminou; NULL enquanto aberta',
+    comentarios        INT                COMMENT 'ADITIVA',
+    qtd_rotulos        INT                COMMENT 'ADITIVA',
+    qtd_responsaveis   INT                COMMENT 'ADITIVA',
+    dias_em_aberto     INT                COMMENT 'NAO ADITIVA: idade do processo; cresce ate fechar',
+    dias_ate_fechar    INT                COMMENT 'NAO ADITIVA: NULL enquanto aberta; use media',
+    _processado_em     TIMESTAMP          COMMENT 'quando o fato foi derivado'
+)
+USING DELTA
+COMMENT 'Fato de snapshot acumulado. Grao: uma issue, com marcos que avancam.'
+"""
+
+
+def montar_fct_issue(issues, repositorios, autores, momento: datetime):
+    """Liga cada issue as dimensoes, com os marcos do ciclo de vida.
+
+    A juncao com `dim_repositorio` usa a vigencia na data de abertura, pelo
+    mesmo motivo de `fct_commit`: a issue pertence ao estado que o
+    repositorio tinha quando ela foi aberta.
+
+    `dias_em_aberto` mede a idade do processo, e e a medida que caracteriza o
+    snapshot acumulado: enquanto a issue esta aberta ela cresce a cada
+    execucao, e quando fecha ela para no valor final. `momento` entra na conta
+    justamente por isso, e e o que faz duas execucoes do mesmo codigo sobre a
+    mesma silver produzirem numeros diferentes, de proposito.
+    """
+    from pyspark.sql import functions as F
+
+    desconhecido = autores.where(F.col("origem_da_chave") == ORIGEM_DESCONHECIDA)
+    sk_desconhecida = desconhecido.collect()[0]["sk_autor"]
+
+    fim_do_processo = F.coalesce(F.col("i.fechada_em"), F.lit(momento).cast("timestamp"))
+
+    return (
+        issues.alias("i")
+        .join(
+            repositorios.alias("r"),
+            (F.col("r.repo") == F.col("i.repo"))
+            & (F.col("i.aberta_em") >= F.col("r.valido_de"))
+            & (
+                F.col("r.valido_ate").isNull()
+                | (F.col("i.aberta_em") < F.col("r.valido_ate"))
+            ),
+            "left",
+        )
+        .join(
+            autores.alias("a"),
+            F.col("a.chave_natural") == F.col("i.autor_id").cast("string"),
+            "left",
+        )
+        .select(
+            F.col("i.numero"),
+            F.col("r.sk_repositorio"),
+            F.coalesce(F.col("a.sk_autor"), F.lit(sk_desconhecida)).alias("sk_autor"),
+            F.date_format("i.aberta_em", "yyyyMMdd").cast("int").alias("sk_data_abertura"),
+            F.date_format("i.fechada_em", "yyyyMMdd").cast("int").alias("sk_data_fechamento"),
+            (F.col("i.fechada_em").isNull()).alias("esta_aberta"),
+            F.col("i.motivo_estado"),
+            F.col("i.comentarios"),
+            F.col("i.qtd_rotulos"),
+            F.col("i.qtd_responsaveis"),
+            F.datediff(fim_do_processo, F.col("i.aberta_em")).alias("dias_em_aberto"),
+            F.datediff(F.col("i.fechada_em"), F.col("i.aberta_em")).alias("dias_ate_fechar"),
+            F.lit(momento).cast("timestamp").alias("_processado_em"),
+        )
+    )
+
+
 def criar_fatos(spark) -> None:
     spark.sql(ddl_fct_commit())
     spark.sql(ddl_fct_repo_snapshot())
+    spark.sql(ddl_fct_issue())

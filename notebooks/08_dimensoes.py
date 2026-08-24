@@ -25,7 +25,7 @@ REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
 
-from radar import gold, qualidade, silver, silver_repositorios
+from radar import gold, qualidade, silver, silver_issues, silver_repositorios
 
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 agora = datetime.now(timezone.utc)
@@ -41,12 +41,15 @@ print("dim_repositorio :", gold.TABELA_REPOSITORIO)
 
 # COMMAND ----------
 
-for tabela in (silver.TABELA_COMMITS, silver_repositorios.TABELA_REPOSITORIOS):
+ORIGENS = {
+    silver.TABELA_COMMITS: "notebooks/05_silver.py",
+    silver_repositorios.TABELA_REPOSITORIOS: "notebooks/07_repositorios.py",
+    silver_issues.TABELA_ISSUES: "notebooks/10_issues.py",
+}
+
+for tabela, notebook in ORIGENS.items():
     if not spark.catalog.tableExists(tabela):
-        raise RuntimeError(
-            f"tabela {tabela} nao existe "
-            "(criadas por notebooks/05_silver.py e notebooks/07_repositorios.py)"
-        )
+        raise RuntimeError(f"tabela {tabela} nao existe (criada por {notebook})")
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {gold.TABELA_TEMPO.rsplit('.', 1)[0]}")
 gold.criar_tabelas(spark)
@@ -98,10 +101,19 @@ display(spark.sql(f"SELECT * FROM {gold.TABELA_TEMPO} ORDER BY sk_tempo LIMIT 5"
 # MAGIC Chave hibrida: `github_id` quando existe, e-mail do git quando nao.
 # MAGIC Mais o membro desconhecido, para o fato que nao resolve nenhuma das
 # MAGIC duas encontrar uma linha.
+# MAGIC
+# MAGIC A dimensao le das duas silvers porque os dois fatos apontam para ela.
+# MAGIC Quem abre issue nem sempre commita: so com commits, todo relator
+# MAGIC externo cairia no membro desconhecido e a pergunta sobre concentracao
+# MAGIC de manutencao perderia justamente a parte de fora do nucleo.
 
 # COMMAND ----------
 
-autores = gold.montar_dim_autor(spark.table(silver.TABELA_COMMITS), agora)
+autores = gold.montar_dim_autor(
+    spark.table(silver.TABELA_COMMITS),
+    agora,
+    issues=spark.table(silver_issues.TABELA_ISSUES),
+)
 com_desconhecido = gold.linha_desconhecida(spark, agora).union(autores)
 
 linhas_autor = gold.escrever(spark, com_desconhecido, gold.TABELA_AUTOR)

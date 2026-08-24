@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from radar import silver
+from radar import silver, silver_comum
 
 pytestmark = pytest.mark.spark
 
@@ -439,18 +439,18 @@ def lote(spark):
 
 def test_sem_checkpoint_o_lote_e_a_bronze_inteira(lote):
     df = lote([ONTEM, HOJE])
-    assert silver.filtrar_novos(df, None).count() == 2
+    assert silver_comum.filtrar_novos(df, None).count() == 2
 
 
 def test_checkpoint_sem_watermark_tambem_le_tudo(lote):
     # Primeira execucao registrada, porem sem lote anterior processado.
     vazio = Checkpoint(repo="b", endpoint="commits@silver", watermark=None)
-    assert silver.filtrar_novos(lote([ONTEM, HOJE]), vazio).count() == 2
+    assert silver_comum.filtrar_novos(lote([ONTEM, HOJE]), vazio).count() == 2
 
 
 def test_watermark_corta_o_que_ja_foi_processado(lote):
     checkpoint = Checkpoint(repo="b", endpoint="commits@silver", watermark=ONTEM)
-    novos = silver.filtrar_novos(lote([ONTEM, HOJE]), checkpoint)
+    novos = silver_comum.filtrar_novos(lote([ONTEM, HOJE]), checkpoint)
 
     assert novos.count() == 1
     assert novos.collect()[0]["sha"] == "sha1"
@@ -460,7 +460,7 @@ def test_comparacao_e_estrita_e_nao_reprocessa_a_fronteira(lote):
     # Linha da bronze nao muda depois de gravada: reler a fronteira so
     # gastaria trabalho para reescrever o mesmo valor.
     checkpoint = Checkpoint(repo="b", endpoint="commits@silver", watermark=HOJE)
-    assert silver.filtrar_novos(lote([ONTEM, HOJE]), checkpoint).count() == 0
+    assert silver_comum.filtrar_novos(lote([ONTEM, HOJE]), checkpoint).count() == 0
 
 
 # --------------------------------------------------------------------------

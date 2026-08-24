@@ -1,6 +1,6 @@
 """Testes do schema declarado da silver. Sem Spark, sem Databricks."""
 
-from radar import silver
+from radar import silver, silver_comum
 
 SCHEMA = silver.SCHEMA_COMMIT
 
@@ -173,8 +173,8 @@ COMMITS = ENDPOINTS["commits"]
 def test_processo_da_silver_nao_colide_com_a_ingestao():
     # As duas cargas dividem a tabela de controle; o nome do processo e o que
     # mantem os dois watermarks independentes.
-    assert silver.nome_processo(COMMITS) == "commits@silver"
-    assert silver.nome_processo(COMMITS) != COMMITS.nome
+    assert silver_comum.nome_processo(COMMITS) == "commits@silver"
+    assert silver_comum.nome_processo(COMMITS) != COMMITS.nome
 
 
 def test_resultado_fecha_quando_nada_se_perde():

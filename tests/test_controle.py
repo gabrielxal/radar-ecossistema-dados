@@ -7,6 +7,7 @@ from radar.controle import (
     calcular_watermark,
     para_iso,
     parametros_de_busca,
+    parametros_de_janela,
 )
 
 
@@ -103,3 +104,48 @@ def test_checkpoint_e_imutavel():
     ck = Checkpoint(repo="x/y", endpoint="commits")
     with pytest.raises(Exception):
         ck.repo = "outro/repo"
+
+
+# --------------------------------------------------------------------------
+# parametros_de_janela -- limite superior e parametros do endpoint
+# --------------------------------------------------------------------------
+
+INICIO = datetime(2026, 5, 24, tzinfo=timezone.utc)
+FIM = datetime(2026, 5, 31, tzinfo=timezone.utc)
+
+
+def test_janela_emite_since_e_until():
+    params = parametros_de_janela(INICIO, FIM, 100)
+    assert params["since"] == "2026-05-24T00:00:00Z"
+    assert params["until"] == "2026-05-31T00:00:00Z"
+
+
+def test_janela_sem_limites_so_tem_paginacao():
+    assert parametros_de_janela(None, None, 100) == {"per_page": 100}
+
+
+def test_extras_do_endpoint_entram_na_chamada():
+    params = parametros_de_janela(None, None, 100, {"state": "all", "sort": "updated"})
+    assert params["state"] == "all"
+    assert params["sort"] == "updated"
+
+
+def test_extras_nao_sobrescrevem_o_mecanismo():
+    """`since` vindo do endpoint quebraria a incrementalidade em silencio."""
+    params = parametros_de_janela(
+        INICIO, FIM, 100, {"since": "2020-01-01T00:00:00Z", "per_page": 5}
+    )
+    assert params["since"] == "2026-05-24T00:00:00Z"
+    assert params["per_page"] == 100
+
+
+def test_busca_aceita_limite_superior_e_extras():
+    checkpoint = Checkpoint(repo="x", endpoint="commits", watermark=INICIO)
+    params = parametros_de_busca(checkpoint, 100, ate=FIM, extras={"state": "all"})
+    assert params["since"] == "2026-05-24T00:00:00Z"
+    assert params["until"] == "2026-05-31T00:00:00Z"
+    assert params["state"] == "all"
+
+
+def test_busca_sem_checkpoint_continua_sem_since():
+    assert "since" not in parametros_de_busca(None, 100)

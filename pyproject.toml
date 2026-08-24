@@ -7,11 +7,19 @@ name = "radar"
 version = "0.1.0"
 description = "Radar do ecossistema de engenharia de dados"
 requires-python = ">=3.10"
-dependencies = ["requests", "python-dotenv"]
+# So o que o pipeline precisa para rodar no Databricks. `python-dotenv` saiu
+# daqui: quem o usa e o `conftest.py`, para ler o HADOOP_HOME da maquina.
+dependencies = ["requests"]
 
 [project.optional-dependencies]
-# pyspark so para teste local: no Databricks o motor vem do cluster.
-dev = ["pytest", "pyspark>=3.5,<4"]
+# A suite rapida nao sobe JVM. Separar os dois grupos e o que permite a CI
+# instalar so isto e, ao faze-lo, provar que os modulos seguem importaveis sem
+# pyspark, que e a premissa da decisao 8.1.
+test = ["pytest", "python-dotenv"]
+
+# pyspark so para teste local: no Databricks o motor vem do cluster, e
+# instala-lo la conflitaria com o runtime.
+dev = ["radar[test]", "pyspark>=3.5,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

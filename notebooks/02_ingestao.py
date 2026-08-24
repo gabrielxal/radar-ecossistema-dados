@@ -147,7 +147,9 @@ for repo in REPOS_ALVO:
             erro=f"{type(erro).__name__}: {erro}"[:500],
         )
 
-    controle.salvar(spark, ingestao.proximo_checkpoint(anterior, resultado, agora))
+    controle.salvar(
+        spark, ingestao.proximo_checkpoint(anterior, resultado, agora, ENDPOINT)
+    )
     resultados.append(resultado)
 
     if resultado.erro:

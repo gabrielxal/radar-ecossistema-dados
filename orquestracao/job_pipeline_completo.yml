@@ -54,10 +54,12 @@ resources:
       #   ingestao_commits -> bronze_commits -> qualidade_bronze
       #                                      -> silver_commits -> qualidade_silver
       #   repositorios ------------------------------------------\
+      #   issues ------------------------------------------------\
       #                                                dimensoes -> fatos
       #
-      # `repositorios` nao depende de nada e roda em paralelo com a ingestao.
-      # `dimensoes` espera as duas silvers, porque le de ambas.
+      # `repositorios` e `issues` nao dependem de nada e rodam em paralelo com
+      # a ingestao de commits. `dimensoes` espera as tres silvers: le de todas,
+      # porque `dim_autor` e conformada entre os fatos que apontam para ela.
       tasks:
         - task_key: ingestao_commits
           notebook_task:
@@ -123,10 +125,31 @@ resources:
           max_retries: 2
           min_retry_interval_millis: 300000
 
+        # `dias_historico` em zero significa carga completa, e so tem efeito
+        # na primeira execucao: dali em diante o checkpoint gravado manda. E o
+        # backfill do estoque de issues, que uma janela de 90 dias nao
+        # alcancaria, porque `since` filtra por `updated_at` e issue parada
+        # nao tem atualizacao recente.
+        #
+        # A coleta e crescente, entao truncar pelo teto nao perde nada: a
+        # execucao seguinte continua de onde parou.
+        - task_key: issues
+          notebook_task:
+            notebook_path: notebooks/10_issues
+            source: GIT
+            base_parameters:
+              dias_historico: "0"
+              limite_paginas: "40"
+              repos: ""
+          environment_key: Default
+          max_retries: 2
+          min_retry_interval_millis: 300000
+
         - task_key: dimensoes
           depends_on:
             - task_key: silver_commits
             - task_key: repositorios
+            - task_key: issues
           notebook_task:
             notebook_path: notebooks/08_dimensoes
             source: GIT

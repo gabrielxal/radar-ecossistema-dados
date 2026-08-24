@@ -24,7 +24,7 @@ REPO = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if f"{REPO}/src" not in sys.path:
     sys.path.insert(0, f"{REPO}/src")
 
-from radar import gold, qualidade, silver, silver_repositorios
+from radar import gold, qualidade, silver, silver_issues, silver_repositorios
 
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 agora = datetime.now(timezone.utc)
@@ -56,6 +56,7 @@ dim_autor = spark.table(gold.TABELA_AUTOR)
 dim_repositorio = spark.table(gold.TABELA_REPOSITORIO)
 commits = spark.table(silver.TABELA_COMMITS)
 repositorios = spark.table(silver_repositorios.TABELA_REPOSITORIOS)
+issues = spark.table(silver_issues.TABELA_ISSUES)
 
 # COMMAND ----------
 
@@ -114,7 +115,61 @@ assert linhas_snapshot == nas_fotos, "o fato nao corresponde as fotos"
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Bateria dos fatos
+# MAGIC ## 3. fct_issue
+# MAGIC
+# MAGIC O terceiro tipo de fato de Kimball, e o unico cuja linha muda depois de
+# MAGIC criada. Os marcos avancam conforme o processo anda, e `dias_em_aberto`
+# MAGIC cresce a cada execucao ate o fechamento congelar o valor.
+# MAGIC
+# MAGIC Nao ha mecanismo de escrita proprio: a gold inteira e reconstruida por
+# MAGIC `overwrite` a partir de chaves determinadas por hash, e a silver ja
+# MAGIC guarda o estado corrente. O UPDATE que este tipo de fato normalmente
+# MAGIC exige acontece por reconstrucao.
+
+# COMMAND ----------
+
+fato_issue = gold.montar_fct_issue(issues, dim_repositorio, dim_autor, agora)
+linhas_issue = gold.escrever(spark, fato_issue, gold.TABELA_FCT_ISSUE)
+
+nas_issues = issues.count()
+print(f"issues na silver : {nas_issues}")
+print(f"linhas no fato   : {linhas_issue}")
+
+assert linhas_issue == nas_issues, "o fato nao corresponde a silver de issues"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### O que so o snapshot acumulado responde
+# MAGIC
+# MAGIC Tempo mediano ate fechar e tamanho do estoque em aberto, por
+# MAGIC repositorio. Um fato de transacao nao daria a segunda coluna, porque
+# MAGIC nela o que importa e o processo que ainda nao terminou.
+
+# COMMAND ----------
+
+display(
+    spark.sql(
+        f"""
+        SELECT r.repo,
+               count_if(f.esta_aberta)                          AS em_aberto,
+               count_if(NOT f.esta_aberta)                       AS fechadas,
+               round(median(CASE WHEN NOT f.esta_aberta
+                            THEN f.dias_ate_fechar END), 1)      AS mediana_dias_ate_fechar,
+               round(median(CASE WHEN f.esta_aberta
+                            THEN f.dias_em_aberto END), 1)       AS mediana_idade_em_aberto
+        FROM {gold.TABELA_FCT_ISSUE} f
+        JOIN {gold.TABELA_REPOSITORIO} r USING (sk_repositorio)
+        GROUP BY r.repo
+        ORDER BY em_aberto DESC
+        """
+    )
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 4. Bateria dos fatos
 # MAGIC
 # MAGIC O Unity Catalog registra chave estrangeira mas nao a impoe. Estas
 # MAGIC verificacoes substituem a imposicao do banco: sem elas, um fato

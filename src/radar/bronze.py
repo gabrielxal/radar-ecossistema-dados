@@ -141,7 +141,7 @@ def projetar(bruto, endpoint: Endpoint, momento: datetime):
 
 
 def deduplicar(df, endpoint: Endpoint):
-    """Uma linha por (repo, chave), mantendo a ocorrencia mais antiga.
+    """Uma linha por chave declarada no endpoint.
 
     A duplicata e esperada: DIAS_SOBREPOSICAO faz cada carga reler um dia ja
     lido. Como o MERGE recusa fonte com chave repetida ("multiple source
@@ -149,13 +149,21 @@ def deduplicar(df, endpoint: Endpoint):
 
     A chave vem do endpoint: numa lista e o registro; num snapshot e o par
     repositorio + dia, o que reduz varias coletas do mesmo dia a uma foto.
+
+    Qual copia sobrevive depende de o registro mudar na origem. Para commit,
+    que e imutavel, as copias sao iguais e a mais antiga serve. Para issue nao:
+    duas coletas do mesmo dia podem ter titulo ou estado diferentes, e manter a
+    mais antiga congelaria a issue no estado em que ela foi vista primeiro.
+
+    O nome do arquivo da landing zone ordena por tempo, porque o caminho
+    termina em `dt=AAAA-MM-DD/HHMMSS.jsonl`.
     """
     from pyspark.sql import Window
     from pyspark.sql import functions as F
 
-    janela = (
-        Window.partitionBy(*endpoint.chaves)
-        .orderBy(F.col("_arquivo_origem").asc())  # ordem determinista
+    ordem = F.col("_arquivo_origem")
+    janela = Window.partitionBy(*endpoint.chaves).orderBy(
+        ordem.desc() if endpoint.mutavel else ordem.asc()
     )
     return (
         df.withColumn("_ordem", F.row_number().over(janela))

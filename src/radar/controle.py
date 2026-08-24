@@ -70,14 +70,46 @@ def para_iso(momento: datetime | None) -> str | None:
     return momento.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def parametros_de_busca(checkpoint: Checkpoint | None, per_page: int) -> dict:
-    """Parametros da coleta. Sem checkpoint nao ha `since`: a carga e completa."""
-    params: dict = {"per_page": per_page}
-    if checkpoint is not None:
-        desde = para_iso(checkpoint.watermark)
-        if desde:
-            params["since"] = desde
+def parametros_de_janela(
+    desde: datetime | None,
+    ate: datetime | None,
+    per_page: int,
+    extras: dict | None = None,
+) -> dict:
+    """Parametros de uma chamada de coleta, com limite inferior e superior.
+
+    Os parametros do endpoint entram primeiro e os do mecanismo depois, e a
+    ordem e deliberada: `per_page`, `since` e `until` sustentam a paginacao e o
+    watermark. Um endpoint que declarasse `since` nos seus parametros fixos
+    quebraria a incrementalidade em silencio, e aqui ele nao consegue.
+    """
+    params: dict = dict(extras or {})
+    params["per_page"] = per_page
+
+    inicio = para_iso(desde)
+    if inicio:
+        params["since"] = inicio
+
+    fim = para_iso(ate)
+    if fim:
+        params["until"] = fim
+
     return params
+
+
+def parametros_de_busca(
+    checkpoint: Checkpoint | None,
+    per_page: int,
+    ate: datetime | None = None,
+    extras: dict | None = None,
+) -> dict:
+    """Parametros da coleta. Sem checkpoint nao ha `since`: a carga e completa."""
+    return parametros_de_janela(
+        checkpoint.watermark if checkpoint is not None else None,
+        ate,
+        per_page,
+        extras,
+    )
 
 
 # --------------------------------------------------------------------------

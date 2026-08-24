@@ -12,7 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from radar import bronze, controle, gold, silver
+from radar import (
+    bronze,
+    controle,
+    gold,
+    silver,
+    silver_issues,
+    silver_repositorios,
+)
 from radar.config import BRONZE, REPOS, fqn
 from radar.ingestao import Endpoint
 
@@ -192,8 +199,10 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
             nome="carga_truncada",
             descricao=(
                 "Nenhuma carga parou no teto de paginas. Truncagem nao "
-                "corrompe o que chegou, mas deixa historico para tras, e o "
-                "watermark avanca por cima, tornando a falta permanente."
+                "corrompe o que chegou, mas registra que a coleta ficou "
+                "incompleta. Em coleta decrescente o watermark nao avanca e a "
+                "execucao seguinte tenta o mesmo intervalo; em coleta "
+                "crescente ele avanca e o backfill continua de onde parou."
             ),
             severidade=AVISA,
             sql=f"""
@@ -220,7 +229,147 @@ def verificacoes_bronze(endpoint: Endpoint) -> tuple[Verificacao, ...]:
 
 
 def verificacoes_silver(endpoint: Endpoint) -> tuple[Verificacao, ...]:
-    """A bateria da silver. Aqui cabem regras sobre o significado do dado.
+    """A bateria da silver do endpoint.
+
+    Despacha em vez de generalizar: as regras aqui falam do significado do
+    dado, e significado nao se parametriza. "Data de fechamento nao pode
+    preceder a de abertura" nao tem equivalente em commit, e "contagem de pais
+    nao pode ser negativa" nao tem equivalente em issue.
+    """
+    if endpoint.nome == "issues":
+        return verificacoes_silver_issues()
+    if endpoint.nome == "commits":
+        return verificacoes_silver_commits()
+    raise KeyError(
+        f"endpoint '{endpoint.nome}' sem bateria de silver declarada em "
+        "qualidade.verificacoes_silver"
+    )
+
+
+def verificacoes_silver_issues() -> tuple[Verificacao, ...]:
+    """A bateria da silver de issues."""
+    tabela = silver_issues.TABELA_ISSUES
+    prs = silver_issues.TABELA_PULL_REQUESTS
+    dominio_estado = _lista_sql(silver_issues.ESTADOS)
+    dominio_motivo = _lista_sql(silver_issues.MOTIVOS_DE_ESTADO)
+    dominio_associacao = _lista_sql(silver_issues.ASSOCIACOES)
+
+    return (
+        Verificacao(
+            nome="chave_duplicada",
+            descricao=(
+                "Uma linha por (repo, numero). Verifica de fora o upsert que "
+                "a carga faz por essa mesma chave, e a deduplicacao do lote "
+                "que precede o MERGE."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT repo, numero FROM {tabela}
+                    GROUP BY repo, numero HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="numero_em_duas_entidades",
+            descricao=(
+                "Nenhum (repo, numero) esta ao mesmo tempo em issues e em "
+                "pull requests. Os dois compartilham a mesma sequencia de "
+                "numeros no repositorio, e a mesma chave nos dois lados "
+                "significaria roteamento errado."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT repo, numero FROM {tabela}
+                    INTERSECT
+                    SELECT repo, numero FROM {prs}
+                )
+            """,
+        ),
+        Verificacao(
+            nome="fechamento_antes_da_abertura",
+            descricao=(
+                "Nenhuma issue fecha antes de abrir. Inverteria o sinal de "
+                "`dias_ate_fechar` no fato."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE fechada_em IS NOT NULL AND fechada_em < aberta_em
+            """,
+        ),
+        Verificacao(
+            nome="fechada_sem_data_de_fechamento",
+            descricao=(
+                "Issue com estado `closed` tem `fechada_em`. Avisa em vez de "
+                "bloquear: e inconsistencia da origem, e o fato trata a "
+                "ausencia como processo ainda aberto."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE estado = 'closed' AND fechada_em IS NULL
+            """,
+        ),
+        Verificacao(
+            nome="estado_fora_do_dominio",
+            descricao=f"`estado` pertence a {dominio_estado}.",
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE estado IS NOT NULL AND estado NOT IN ({dominio_estado})
+            """,
+        ),
+        Verificacao(
+            nome="motivo_de_estado_fora_do_dominio",
+            descricao=(
+                f"`motivo_estado` pertence a {dominio_motivo}. Valor novo "
+                "aqui significa que a API passou a classificar de outro jeito."
+            ),
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE motivo_estado IS NOT NULL
+                  AND motivo_estado NOT IN ({dominio_motivo})
+            """,
+        ),
+        Verificacao(
+            nome="associacao_fora_do_dominio",
+            descricao=f"`associacao_autor` pertence a {dominio_associacao}.",
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE associacao_autor IS NOT NULL
+                  AND associacao_autor NOT IN ({dominio_associacao})
+            """,
+        ),
+        Verificacao(
+            nome="contagem_negativa",
+            descricao=(
+                "`size(NULL)` devolve -1 em modo legado, entao contagem "
+                "negativa denuncia guarda ausente na tipagem."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE qtd_rotulos < 0 OR qtd_responsaveis < 0 OR comentarios < 0
+            """,
+        ),
+        Verificacao(
+            nome="repositorio_fora_do_escopo",
+            descricao="Todo `repo` da tabela esta na lista configurada.",
+            severidade=AVISA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {tabela}
+                WHERE repo NOT IN ({_lista_sql(REPOS)})
+            """,
+        ),
+    )
+
+
+def verificacoes_silver_commits() -> tuple[Verificacao, ...]:
+    """A bateria da silver de commits.
 
     Sao verificacoes que a bronze nao poderia fazer: comparar duas datas
     exige que elas sejam datas, e nao texto.
@@ -507,6 +656,7 @@ def verificacoes_fatos() -> tuple[Verificacao, ...]:
     """
     commit = gold.TABELA_FCT_COMMIT
     snapshot = gold.TABELA_FCT_SNAPSHOT
+    issue = gold.TABELA_FCT_ISSUE
     tempo = gold.TABELA_TEMPO
     autor = gold.TABELA_AUTOR
     repositorio = gold.TABELA_REPOSITORIO
@@ -524,6 +674,46 @@ def verificacoes_fatos() -> tuple[Verificacao, ...]:
                     SELECT sha, sk_repositorio FROM {commit}
                     GROUP BY sha, sk_repositorio HAVING count(*) > 1
                 )
+            """,
+        ),
+        Verificacao(
+            nome="grao_do_fct_issue",
+            descricao=(
+                "Uma issue por linha. A silver ja colapsa o log de versoes "
+                "num estado corrente, entao chave repetida aqui significa "
+                "que a juncao com a dimensao por vigencia multiplicou linha."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM (
+                    SELECT numero, sk_repositorio FROM {issue}
+                    GROUP BY numero, sk_repositorio HAVING count(*) > 1
+                )
+            """,
+        ),
+        Verificacao(
+            nome="marco_final_incoerente",
+            descricao=(
+                "`esta_aberta` e a ausencia de `sk_data_fechamento` dizem a "
+                "mesma coisa. Divergirem significa que os marcos do snapshot "
+                "acumulado deixaram de descrever o mesmo processo."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {issue}
+                WHERE esta_aberta <> (sk_data_fechamento IS NULL)
+            """,
+        ),
+        Verificacao(
+            nome="duracao_negativa_no_fct_issue",
+            descricao=(
+                "Nenhuma issue leva tempo negativo para fechar nem tem idade "
+                "negativa. Denuncia marco invertido que a silver deixou passar."
+            ),
+            severidade=BLOQUEIA,
+            sql=f"""
+                SELECT count(*) AS violacoes FROM {issue}
+                WHERE dias_ate_fechar < 0 OR dias_em_aberto < 0
             """,
         ),
         Verificacao(
@@ -554,6 +744,9 @@ def verificacoes_fatos() -> tuple[Verificacao, ...]:
                     UNION ALL
                     SELECT f.sk_repositorio FROM {snapshot} f
                     LEFT ANTI JOIN {repositorio} d USING (sk_repositorio)
+                    UNION ALL
+                    SELECT f.sk_repositorio FROM {issue} f
+                    LEFT ANTI JOIN {repositorio} d USING (sk_repositorio)
                 )
             """,
         ),
@@ -565,16 +758,22 @@ def verificacoes_fatos() -> tuple[Verificacao, ...]:
             ),
             severidade=BLOQUEIA,
             sql=f"""
-                SELECT count(*) AS violacoes
-                FROM {commit} f
-                LEFT ANTI JOIN {autor} d USING (sk_autor)
+                SELECT count(*) AS violacoes FROM (
+                    SELECT f.sk_autor FROM {commit} f
+                    LEFT ANTI JOIN {autor} d USING (sk_autor)
+                    UNION ALL
+                    SELECT f.sk_autor FROM {issue} f
+                    LEFT ANTI JOIN {autor} d USING (sk_autor)
+                )
             """,
         ),
         Verificacao(
             nome="fato_sem_dimensao_de_tempo",
             descricao=(
-                "As duas chaves de tempo existem na dimensao. Sao calculadas "
-                "em vez de buscadas, entao esta e a unica rede que resta."
+                "Toda chave de tempo existe na dimensao, nos tres fatos. Sao "
+                "calculadas em vez de buscadas, entao esta e a unica rede que "
+                "resta. A de fechamento so entra quando existe: issue aberta "
+                "nao tem marco final, e isso nao e orfandade."
             ),
             severidade=BLOQUEIA,
             sql=f"""
@@ -584,6 +783,11 @@ def verificacoes_fatos() -> tuple[Verificacao, ...]:
                     SELECT sk_data_autoria FROM {commit} WHERE sk_data_autoria IS NOT NULL
                     UNION ALL
                     SELECT sk_data FROM {snapshot}
+                    UNION ALL
+                    SELECT sk_data_abertura FROM {issue}
+                    UNION ALL
+                    SELECT sk_data_fechamento FROM {issue}
+                    WHERE sk_data_fechamento IS NOT NULL
                 ) f
                 LEFT ANTI JOIN {tempo} t ON t.sk_tempo = f.sk
             """,
@@ -740,21 +944,80 @@ def reconciliar(
     )
 
 
+# Onde cada endpoint deposita o que a silver leu da bronze.
+#
+# A funcao recebia o endpoint e ignorava, lendo sempre as tabelas de commits.
+# Enquanto so o notebook de commits chamava, o defeito nao aparecia; para
+# qualquer outro endpoint a conta seria feita contra a tabela errada.
+DESTINOS_SILVER: dict[str, tuple[str, ...]] = {
+    "commits": (silver.TABELA_COMMITS, silver.TABELA_REJEITADOS),
+    "repositorios": (silver_repositorios.TABELA_REPOSITORIOS,),
+    # Tres destinos: o endpoint /issues devolve pull requests misturados, e
+    # eles vao para tabela propria em vez de sumirem. Sem esse terceiro balde
+    # a reconciliacao acusaria como perda o que foi decisao.
+    "issues": (
+        silver_issues.TABELA_ISSUES,
+        silver_issues.TABELA_PULL_REQUESTS,
+        silver_issues.TABELA_REJEITADOS,
+    ),
+}
+
+
+def destinos_silver(endpoint: Endpoint) -> tuple[str, ...]:
+    """Tabelas que recebem o que saiu da bronze deste endpoint.
+
+    Endpoint novo precisa ser declarado aqui de proposito, e a falta levanta
+    em vez de devolver vazio: uma reconciliacao que compara com nada aprovaria
+    qualquer coisa.
+
+    Endpoint que descarte parte legitima do que leu precisa gravar os
+    descartados numa tabela e declara-la junto. E o caso de `/issues`, que
+    devolve pull requests misturados as issues: sem uma tabela para eles, a
+    diferenca apareceria aqui como perda, sem pista de onde as linhas foram
+    parar.
+    """
+    if endpoint.nome not in DESTINOS_SILVER:
+        raise KeyError(
+            f"endpoint '{endpoint.nome}' sem destino silver declarado em "
+            "qualidade.DESTINOS_SILVER"
+        )
+    return DESTINOS_SILVER[endpoint.nome]
+
+
+def contagem_na_bronze(spark, endpoint: Endpoint) -> int:
+    """Quantas entidades a bronze do endpoint contem.
+
+    Para endpoint imutavel, linha e entidade e a contagem e direta. Para
+    endpoint mutavel a bronze e um log de versoes, com uma linha por dia de
+    coleta, e a silver colapsa o log numa linha por entidade. Contar linha dos
+    dois lados compararia grandezas diferentes: a reconciliacao acusaria perda
+    proporcional a quantas vezes as issues foram atualizadas.
+
+    A pergunta que a reconciliacao faz continua sendo "chegou tudo?", e a
+    unidade da resposta e a entidade, nao a versao.
+    """
+    tabela = bronze.nome_tabela(endpoint)
+    if not endpoint.mutavel:
+        return spark.table(tabela).count()
+
+    return spark.sql(
+        f"SELECT count(DISTINCT repo, {endpoint.chave}) AS total FROM {tabela}"
+    ).collect()[0]["total"]
+
+
 def reconciliar_silver(spark, endpoint: Endpoint) -> Reconciliacao:
-    """Contagem de controle: `bronze = silver + quarentena`.
+    """Contagem de controle: `bronze = soma dos destinos da silver`.
 
     A igualdade so fecha porque registro fora do contrato e desviado, nunca
     descartado. Se a silver descartasse em silencio, a diferenca apareceria
     aqui sem nenhuma pista de onde as linhas foram parar.
     """
-    na_bronze = spark.table(bronze.nome_tabela(endpoint)).count()
-    na_silver = spark.table(silver.TABELA_COMMITS).count()
-    em_quarentena = spark.table(silver.TABELA_REJEITADOS).count()
-
     return Reconciliacao(
         nome=RECONCILIACAO_SILVER,
-        na_origem=na_bronze,
-        no_destino=na_silver + em_quarentena,
+        na_origem=contagem_na_bronze(spark, endpoint),
+        no_destino=sum(
+            spark.table(tabela).count() for tabela in destinos_silver(endpoint)
+        ),
     )
 
 

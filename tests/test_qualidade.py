@@ -304,3 +304,70 @@ def test_uso_do_membro_desconhecido_avisa_em_vez_de_bloquear():
     # Ele existe para ser usado; o que interessa e saber quanto.
     regra = next(v for v in FATOS if v.nome == "desconhecido_usado_com_chave_resolvivel")
     assert regra.severidade == qualidade.AVISA
+
+
+# --------------------------------------------------------------------------
+# Destino da silver por endpoint
+# --------------------------------------------------------------------------
+
+def test_cada_endpoint_tem_o_proprio_destino_silver():
+    """A funcao recebia o endpoint e lia sempre as tabelas de commits."""
+    from radar import qualidade as q
+    from radar.ingestao import ENDPOINTS as E
+
+    commits = q.destinos_silver(E["commits"])
+    repositorios = q.destinos_silver(E["repositorios"])
+    assert commits != repositorios
+    assert "commits" in commits[0]
+    assert "repositorios" in repositorios[0]
+
+
+def test_commits_reconcilia_contra_silver_mais_quarentena():
+    from radar import qualidade as q, silver
+    from radar.ingestao import ENDPOINTS as E
+
+    assert q.destinos_silver(E["commits"]) == (
+        silver.TABELA_COMMITS,
+        silver.TABELA_REJEITADOS,
+    )
+
+
+def test_endpoint_nao_declarado_levanta():
+    """Reconciliar contra nada aprovaria qualquer coisa."""
+    import pytest
+
+    from radar import qualidade as q
+    from radar.ingestao import Endpoint
+
+    releases = Endpoint(
+        nome="releases", caminho="/repos/{repo}/releases", campo_data="published_at",
+        chave="id", chaves=("repo", "id"),
+    )
+    with pytest.raises(KeyError, match="releases"):
+        q.destinos_silver(releases)
+
+
+def test_issues_reconcilia_contra_os_tres_destinos():
+    """O terceiro balde existe porque descartar PR seria perda declarada."""
+    from radar import qualidade as q, silver_issues
+    from radar.ingestao import ENDPOINTS as E
+
+    assert q.destinos_silver(E["issues"]) == (
+        silver_issues.TABELA_ISSUES,
+        silver_issues.TABELA_PULL_REQUESTS,
+        silver_issues.TABELA_REJEITADOS,
+    )
+
+
+def test_bateria_de_silver_sem_endpoint_declarado_levanta():
+    import pytest
+
+    from radar import qualidade as q
+    from radar.ingestao import Endpoint
+
+    releases = Endpoint(
+        nome="releases", caminho="/repos/{repo}/releases", campo_data="published_at",
+        chave="id", chaves=("repo", "id"),
+    )
+    with pytest.raises(KeyError, match="releases"):
+        q.verificacoes_silver(releases)
