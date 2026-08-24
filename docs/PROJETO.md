@@ -766,6 +766,60 @@ qualquer máquina.
 > Os testes locais validam a nossa lógica, não paridade de comportamento entre versões
 > do motor.
 
+### 8.10 Orquestração: dois jobs, não um
+
+A cadência de cada carga é decidida por uma pergunta só: **o dado perdido volta?**
+
+| Fonte | Histórico na API | Execução perdida |
+|---|---|---|
+| `/repos/{repo}/commits` | 90 dias, acessível por `since` | a seguinte recupera |
+| `/repos/{repo}` | nenhum, devolve só o estado de agora | **o dia está perdido para sempre** |
+
+Stars, forks e issues abertas não têm passado consultável. O valor de ontem só existe se
+alguém o tiver gravado ontem. Isso torna a coleta do snapshot a única parte do pipeline com
+custo irreversível de atraso, e ela ganhou job próprio, diário.
+
+O resto roda semanalmente. Commit tem histórico recuperável, então uma execução perdida se
+conserta na seguinte, como já foi comprovado na recuperação descrita em 5.7. Juntar tudo num
+job diário gastaria compute de graça para reprocessar o que a API ainda guarda.
+
+| Job | Cadência | Tarefas |
+|---|---|---|
+| `radar-snapshot-diario` | diária | `07_repositorios` |
+| `radar-pipeline-completo` | semanal | as oito, em DAG |
+
+As definições estão versionadas em `orquestracao/*.yml`.
+
+#### Por que `git_source` e não Git folder
+
+As tarefas usam `"source": "GIT"`, com o job clonando o repositório a cada execução. A
+alternativa seria apontar para os notebooks do Git folder no workspace, que exige alguém
+clicar em Pull.
+
+A escolha elimina uma classe inteira de defeito documentada no diário: código no workspace
+divergindo do que está no repositório, com a execução usando a versão antiga sem avisar
+(entradas 18 e 19). Em produção não há quem clique.
+
+#### O DAG não é uma fila
+
+```
+ingestao_commits → bronze_commits → qualidade_bronze
+                                  ↘ silver_commits → qualidade_silver
+repositorios ─────────────────────────────────────↘
+                                                    dimensoes → fatos
+```
+
+`repositorios` não depende de nada e roda em paralelo com a ingestão de commits. E
+`dimensoes` espera **as duas** silvers, porque lê de ambas. Declarar as dependências reais,
+em vez de encadear tudo em sequência, encurta a execução e deixa explícito o que de fato
+depende de quê.
+
+#### Retentativa onde ela ajuda
+
+Só as tarefas que tocam a rede têm `max_retries`. Falha de API é transitória e a segunda
+tentativa costuma passar. Falha em `dimensoes` ou `fatos` é defeito de lógica ou de dado, e
+retentar apenas repete o erro cinco minutos depois.
+
 ---
 
 ## 9. Diário de bordo

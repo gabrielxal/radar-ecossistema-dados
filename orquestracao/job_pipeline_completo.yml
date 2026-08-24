@@ -1,0 +1,124 @@
+# Pipeline inteiro, da ingestao aos fatos.
+#
+# Semanal, e nao diario, porque commit tem historico recuperavel na API: uma
+# execucao perdida se conserta na seguinte. Rodar todo dia gastaria compute
+# reprocessando o que a origem ainda guarda.
+
+name: radar-pipeline-completo
+description: >-
+  Ingestao, bronze, silver, dimensoes e fatos. Semanal porque commit tem
+  historico recuperavel: execucao perdida se conserta na seguinte.
+
+tags:
+  projeto: radar
+  criticidade: dado-recuperavel
+
+git_source:
+  git_url: https://github.com/gabrielxal/radar-ecossistema-dados
+  git_provider: gitHub
+  git_branch: main
+
+schedule:
+  # 9h30 de domingo
+  quartz_cron_expression: "0 30 9 ? * SUN"
+  timezone_id: America/Sao_Paulo
+  pause_status: UNPAUSED
+
+max_concurrent_runs: 1
+
+queue:
+  enabled: true
+
+# As dependencias declaradas formam um DAG, nao uma fila:
+#
+#   ingestao_commits -> bronze_commits -> qualidade_bronze
+#                                      -> silver_commits -> qualidade_silver
+#   repositorios ------------------------------------------\
+#                                                dimensoes -> fatos
+#
+# `repositorios` nao depende de nada e roda em paralelo. `dimensoes` espera as
+# duas silvers, porque le de ambas.
+tasks:
+  - task_key: ingestao_commits
+    description: API do GitHub para a landing zone
+    notebook_task:
+      notebook_path: notebooks/02_ingestao
+      source: GIT
+      base_parameters:
+        dias_historico: "90"
+        limite_paginas: "5"
+        repos: ""
+    timeout_seconds: 3600
+    max_retries: 1
+    min_retry_interval_millis: 600000
+
+  - task_key: bronze_commits
+    depends_on:
+      - task_key: ingestao_commits
+    notebook_task:
+      notebook_path: notebooks/03_bronze
+      source: GIT
+      base_parameters:
+        endpoint: commits
+    timeout_seconds: 3600
+
+  - task_key: qualidade_bronze
+    depends_on:
+      - task_key: bronze_commits
+    notebook_task:
+      notebook_path: notebooks/04_qualidade
+      source: GIT
+      base_parameters:
+        endpoint: commits
+    timeout_seconds: 1800
+
+  - task_key: silver_commits
+    depends_on:
+      - task_key: bronze_commits
+    notebook_task:
+      notebook_path: notebooks/05_silver
+      source: GIT
+      base_parameters:
+        endpoint: commits
+    timeout_seconds: 3600
+
+  - task_key: qualidade_silver
+    depends_on:
+      - task_key: silver_commits
+    notebook_task:
+      notebook_path: notebooks/06_qualidade_silver
+      source: GIT
+      base_parameters:
+        endpoint: commits
+    timeout_seconds: 1800
+
+  - task_key: repositorios
+    description: Independente dos commits; coleta, bronze e silver num notebook so
+    notebook_task:
+      notebook_path: notebooks/07_repositorios
+      source: GIT
+      base_parameters:
+        repos: ""
+    timeout_seconds: 1800
+    max_retries: 2
+    min_retry_interval_millis: 300000
+
+  - task_key: dimensoes
+    description: Le as duas silvers, por isso espera as duas
+    depends_on:
+      - task_key: silver_commits
+      - task_key: repositorios
+    notebook_task:
+      notebook_path: notebooks/08_dimensoes
+      source: GIT
+    timeout_seconds: 1800
+
+  # Sem retentativa daqui para baixo: falha em dimensao ou fato e defeito de
+  # logica ou de dado, e retentar so repete o erro cinco minutos depois.
+  - task_key: fatos
+    depends_on:
+      - task_key: dimensoes
+    notebook_task:
+      notebook_path: notebooks/09_fatos
+      source: GIT
+    timeout_seconds: 1800
