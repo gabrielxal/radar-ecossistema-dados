@@ -44,8 +44,6 @@ raciocínio visível. É isso que este documento registra.
 
 ### 2.1 Por que começar pela pergunta, não pelo dado
 
-O erro mais comum em projeto de portfólio é começar pela fonte: *"achei uma API e carreguei
-no Databricks"*. Quem avalia lê isso como tutorial reproduzido.
 
 Engenharia de dados existe para responder pergunta de negócio. A arquitetura é
 consequência da pergunta, nunca o contrário. Toda escolha técnica deste projeto é
