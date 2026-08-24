@@ -3,48 +3,55 @@
 # Job proprio, e diario, por um motivo so: stars, forks e issues abertas nao
 # tem historico na API. O dia nao coletado esta perdido para sempre, ao
 # contrario de commits, que a API guarda por 90 dias.
+#
+# Esta e a configuracao que existe hoje no workspace, transcrita. Substitua
+# SEU_EMAIL@exemplo.com antes de colar: o endereco real fica de fora do
+# repositorio de proposito, porque arquivo publico com e-mail dentro vira
+# alvo de coleta automatizada.
 
-name: radar-snapshot-diario
-description: >-
-  Foto diaria dos metadados dos repositorios. Roda todo dia porque a API nao
-  guarda historico dessas medidas: o dia nao coletado nao volta.
+resources:
+  jobs:
+    snapshot_diario_radar:
+      name: snapshot-diario-radar
 
-tags:
-  projeto: radar
-  criticidade: dado-irrecuperavel
+      schedule:
+        # segundo minuto hora dia-do-mes mes dia-da-semana
+        # 59     0      9    todo dia    todo  qualquer     -> 9h da manha
+        quartz_cron_expression: 59 0 9 * * ?
+        timezone_id: America/Fortaleza
+        pause_status: UNPAUSED
 
-# O job clona o repositorio a cada execucao, em vez de usar os notebooks do
-# workspace. Em producao nao ha quem clique em Pull, e codigo divergente
-# rodando em silencio ja custou tres rodadas de depuracao neste projeto
-# (diario de bordo, entradas 18 e 19).
-git_source:
-  git_url: https://github.com/gabrielxal/radar-ecossistema-dados
-  git_provider: gitHub
-  git_branch: main
+      # O job clona o repositorio a cada execucao, em vez de usar os notebooks
+      # do workspace. Em producao nao ha quem clique em Pull, e codigo
+      # divergente rodando em silencio ja custou tres rodadas de depuracao
+      # neste projeto (diario de bordo, entradas 18 e 19).
+      git_source:
+        git_url: https://github.com/gabrielxal/radar-ecossistema-dados
+        git_provider: gitHub
+        git_branch: main
 
-schedule:
-  # segundo minuto hora dia-do-mes mes dia-da-semana
-  # 0      0      9    todo dia    todo  qualquer      -> 9h da manha
-  quartz_cron_expression: "0 0 9 * * ?"
-  timezone_id: America/Sao_Paulo
-  pause_status: UNPAUSED
+      queue:
+        enabled: true
 
-max_concurrent_runs: 1
+      performance_target: PERFORMANCE_OPTIMIZED
 
-queue:
-  enabled: true
+      environments:
+        - environment_key: Default
+          spec:
+            environment_version: "5"
 
-tasks:
-  - task_key: repositorios
-    description: Coleta, bronze e silver do endpoint /repos/{repo}
-    notebook_task:
-      notebook_path: notebooks/07_repositorios
-      source: GIT
-      base_parameters:
-        repos: ""
-    timeout_seconds: 1800
-    # Retentativa porque a tarefa toca a rede, e falha de API costuma ser
-    # transitoria. Cinco minutos entre tentativas.
-    max_retries: 2
-    min_retry_interval_millis: 300000
-    retry_on_timeout: false
+      tasks:
+        - task_key: job-snapshot-diario
+          notebook_task:
+            notebook_path: notebooks/07_repositorios
+            source: GIT
+          environment_key: Default
+          # Sem notificacao, um job diario que para de rodar so e descoberto
+          # quando alguem consulta a serie. E os dias parados nao voltam.
+          email_notifications:
+            on_failure:
+              - SEU_EMAIL@exemplo.com
+          notification_settings:
+            no_alert_for_skipped_runs: true
+            no_alert_for_canceled_runs: true
+            alert_on_last_attempt: true
