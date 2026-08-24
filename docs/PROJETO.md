@@ -44,7 +44,6 @@ raciocínio visível. É isso que este documento registra.
 
 ### 2.1 Por que começar pela pergunta, não pelo dado
 
-
 Engenharia de dados existe para responder pergunta de negócio. A arquitetura é
 consequência da pergunta, nunca o contrário. Toda escolha técnica deste projeto é
 rastreável até uma das perguntas abaixo.
