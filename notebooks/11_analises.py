@@ -129,7 +129,26 @@ display(spark.sql(analises.bus_factor()))
 # MAGIC fechada mostra isso.
 # MAGIC
 # MAGIC O marco do meio, `primeira_resposta_em`, não existe: não vem no payload da
-# MAGIC issue. Está registrado em 10.11 como melhoria, com o caminho barato.
+# MAGIC issue. Está registrado nas melhorias planejadas, com o caminho barato.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Antes da resposta: em quais repositórios ela vale
+# MAGIC
+# MAGIC A coleta de issues é crescente, e o backfill leva várias execuções nos
+# MAGIC repositórios grandes. Enquanto ele não termina, o que chegou é a parte
+# MAGIC mais velha e já fechada do backlog: issue aberta recebe comentário, tem
+# MAGIC `updated_at` recente, e está no fim da caminhada.
+# MAGIC
+# MAGIC Ler a pergunta 3 num repositório truncado dá a mesma forma de erro da
+# MAGIC seção 5.7. O dado que chegou está correto e a conclusão tirada dele não.
+# MAGIC
+# MAGIC A coluna `confiavel` separa os dois casos. Use só as linhas com `true`.
+
+# COMMAND ----------
+
+display(spark.sql(analises.cobertura_do_backfill()))
 
 # COMMAND ----------
 

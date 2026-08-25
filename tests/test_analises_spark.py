@@ -314,3 +314,101 @@ def test_painel_responde_com_fct_issue_vazia(spark, cenario):
     assert linha["commits_45d"] == 1
     assert linha["bus_factor"] == 1
     assert linha["issues_em_aberto"] is None
+
+
+# --------------------------------------------------------------------------
+# O portao da pergunta 3
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def cobertura(spark):
+    """Tabela de controle e silver de issues, no formato real."""
+
+    def constroi(estados, issues_por_repo):
+        spark.createDataFrame(
+            [(r, "issues", st, wm) for r, st, wm in estados],
+            "repo STRING, endpoint STRING, status STRING, watermark STRING",
+        ).selectExpr(
+            "repo", "endpoint", "status", "to_timestamp(watermark) AS watermark"
+        ).createOrReplaceTempView("_controle")
+
+        spark.createDataFrame(
+            [(r, n, e) for r, linhas in issues_por_repo.items()
+             for n, e in linhas],
+            "repo STRING, numero INT, estado STRING",
+        ).selectExpr(
+            "repo", "numero", "estado",
+            "to_timestamp('2026-08-01T00:00:00') AS atualizada_em",
+        ).createOrReplaceTempView("_silver_issues")
+
+        return {"controle_ingestao": "_controle", "silver_issues": "_silver_issues"}
+
+    return constroi
+
+
+def test_status_ok_marca_o_repositorio_como_confiavel(spark, cobertura):
+    t = cobertura(
+        estados=[("org/pronto", "ok", "2026-08-24T00:00:00")],
+        issues_por_repo={"org/pronto": [(1, "open"), (2, "closed")]},
+    )
+    linha = spark.sql(analises.cobertura_do_backfill(**t)).collect()[0]
+
+    assert linha["confiavel"] is True
+    assert linha["issues_na_silver"] == 2
+    assert linha["em_aberto"] == 1
+
+
+def test_truncado_nao_e_confiavel(spark, cobertura):
+    """O backfill em andamento traz a parte velha e ja fechada do backlog."""
+    t = cobertura(
+        estados=[("org/meio", "truncado", "2018-08-09T00:00:00")],
+        issues_por_repo={"org/meio": [(1, "closed")]},
+    )
+    linha = spark.sql(analises.cobertura_do_backfill(**t)).collect()[0]
+
+    assert linha["confiavel"] is False
+    assert linha["coletado_ate"].year == 2018
+
+
+def test_repositorio_pulado_pela_sentinela_nao_parece_vazio(spark, cobertura):
+    """`registros` da tabela de controle e da ultima execucao, nao acumulado.
+
+    Delta e Hudi apareceram com zero no dado real por terem sido pulados por
+    `304`, com milhares de linhas na silver. Contar a silver desfaz o engano.
+    """
+    t = cobertura(
+        estados=[("org/completo", "ok", "2026-08-24T00:00:00")],
+        issues_por_repo={"org/completo": [(n, "closed") for n in range(1, 51)]},
+    )
+    linha = spark.sql(analises.cobertura_do_backfill(**t)).collect()[0]
+
+    assert linha["issues_na_silver"] == 50
+    assert linha["confiavel"] is True
+
+
+def test_repositorio_sem_issue_nenhuma_aparece_com_zero(spark, cobertura):
+    """`apache/spark` conduz discussao no JIRA: coletou PR e nenhuma issue."""
+    t = cobertura(
+        estados=[("apache/spark", "truncado", "2018-08-09T00:00:00")],
+        issues_por_repo={"org/outro": [(1, "open")]},
+    )
+    linha = [
+        l for l in spark.sql(analises.cobertura_do_backfill(**t)).collect()
+        if l["repo"] == "apache/spark"
+    ][0]
+
+    assert linha["issues_na_silver"] == 0
+
+
+def test_os_nao_confiaveis_vem_primeiro(spark, cobertura):
+    """A lista existe para decidir o que nao usar, entao o alerta lidera."""
+    t = cobertura(
+        estados=[("org/pronto", "ok", "2026-08-24T00:00:00"),
+                 ("org/atrasado", "truncado", "2018-01-01T00:00:00"),
+                 ("org/quase", "truncado", "2026-08-09T00:00:00")],
+        issues_por_repo={"org/pronto": [(1, "open")]},
+    )
+    ordem = [l["repo"] for l in spark.sql(analises.cobertura_do_backfill(**t)).collect()]
+
+    assert ordem[0] == "org/atrasado"
+    assert ordem[-1] == "org/pronto"

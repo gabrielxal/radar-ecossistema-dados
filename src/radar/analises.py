@@ -15,7 +15,8 @@ sintetico, sem Delta e sem Unity Catalog.
 
 from __future__ import annotations
 
-from radar import gold
+from radar import controle, gold
+from radar import silver_issues as silver_issues_modulo
 
 # --------------------------------------------------------------------------
 # As correcoes que separam leitura correta de leitura ingenua
@@ -41,15 +42,73 @@ DIAS_DE_ATRASO_ACEITAVEL = 7
 SEM_BOT = "(a.github_tipo <> 'bot' OR a.github_tipo IS NULL)"
 
 
-def _tabelas(fato=None, repositorio=None, autor=None, tempo=None, issue=None):
+def _tabelas(
+    fato=None, repositorio=None, autor=None, tempo=None, issue=None,
+    silver_issues=None, controle_ingestao=None,
+):
     """Nomes das tabelas, com o catalogo real como padrao."""
+    silver_issues_padrao = silver_issues_modulo.TABELA_ISSUES
     return {
         "fato": fato or gold.TABELA_FCT_COMMIT,
         "repositorio": repositorio or gold.TABELA_REPOSITORIO,
         "autor": autor or gold.TABELA_AUTOR,
         "tempo": tempo or gold.TABELA_TEMPO,
         "issue": issue or gold.TABELA_FCT_ISSUE,
+        "silver_issues": silver_issues or silver_issues_padrao,
+        "controle": controle_ingestao or controle.TABELA_CONTROLE,
     }
+
+
+# --------------------------------------------------------------------------
+# O portao da pergunta 3
+# --------------------------------------------------------------------------
+
+def cobertura_do_backfill(**tabelas) -> str:
+    """Em quais repositorios o historico de issues ja chegou inteiro.
+
+    A tabela de controle sozinha nao responde isso. A coluna `registros` e da
+    ultima execucao, e nao acumulada: um repositorio que a sentinela pulou por
+    `304` aparece com zero mesmo tendo milhares de linhas na silver. Lida sem
+    esse cuidado, ela sugere perda onde houve conclusao.
+
+    O que decide e o par (`status`, `watermark`). Em coleta crescente, status
+    `ok` com watermark no presente significa que a caminhada alcancou o fim.
+    `truncado` significa backfill em andamento, e o watermark diz ate onde foi.
+
+    Por que isso e portao e nao curiosidade: issue aberta recebe comentario,
+    logo tem `updated_at` recente, logo esta no fim da caminhada ascendente.
+    Num repositorio truncado, o que chegou e a parte velha e ja fechada do
+    backlog, e toda medida sobre issue em aberto sai deslocada. E a mesma
+    forma do defeito da secao 5.7: o dado que chegou esta correto, e a
+    conclusao tirada dele nao.
+    """
+    t = _tabelas(**tabelas)
+
+    return f"""
+        WITH estado AS (
+            SELECT repo, status, watermark
+            FROM {t["controle"]}
+            WHERE endpoint = 'issues'
+        ),
+        acumulado AS (
+            SELECT repo,
+                   count(*)                AS issues_na_silver,
+                   count_if(estado = 'open') AS em_aberto,
+                   max(atualizada_em)      AS ultima_atualizacao_vista
+            FROM {t["silver_issues"]}
+            GROUP BY repo
+        )
+        SELECT e.repo,
+               e.status,
+               date(e.watermark) AS coletado_ate,
+               coalesce(a.issues_na_silver, 0) AS issues_na_silver,
+               coalesce(a.em_aberto, 0)        AS em_aberto,
+               e.status = 'ok'                 AS confiavel,
+               datediff(current_date(), date(e.watermark)) AS dias_de_atraso
+        FROM estado e
+        LEFT JOIN acumulado a ON a.repo = e.repo
+        ORDER BY confiavel, dias_de_atraso DESC
+    """
 
 
 # --------------------------------------------------------------------------
