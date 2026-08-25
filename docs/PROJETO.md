@@ -64,8 +64,17 @@ dados. Sinaliza domínio de mercado, não apenas domínio de ferramenta.
 | 2 | Bus factor: quantas pessoas concentram 50% dos commits? | Análise de concentração; dimensão de autor conformada |
 | 3 | Quanto tempo uma issue leva para receber a primeira resposta e para ser fechada? | Fato com múltiplos marcos temporais (*snapshot acumulado*) |
 | 4 | Quando um repositório muda de linguagem, licença ou dono, o histórico antigo muda junto? | Slowly Changing Dimension Tipo 2 |
+| 5 | O ecossistema é sustentado por trabalho remunerado em horário comercial, ou por voluntariado? | Dimensão de tempo com dois papéis: quando o código foi escrito e quando entrou |
 
 A pergunta 4 é a que justifica a complexidade do modelo. Sem ela, SCD2 seria enfeite.
+
+A pergunta 5 entrou depois das outras, e o motivo vale registro. Ela foi formulada durante a
+análise, quando a dimensão de tempo com dois papéis revelou a diferença entre trabalho feito
+no período e história anterior absorvida de uma vez. Foi a arquitetura sugerindo a pergunta,
+e não o contrário, o que é o oposto do que a seção 2.1 defende. Aconteceu, e fica registrado
+em vez de reescrito como se tivesse sido planejado.
+
+As respostas estão em `notebooks/11_analises.py`, e as consultas em `src/radar/analises.py`.
 
 ### 2.4 A cadeia causal
 
@@ -1030,6 +1039,26 @@ Um efeito colateral bem-vindo: os testes que leem arquivo pelo Spark são pulado
 autor quando falta `winutils.exe`, e no Linux do runner não há esse problema. A cobertura real
 da suíte com JVM é maior na CI do que localmente.
 
+### 8.12 Consulta de análise mora em `src/`, não solta no notebook
+
+Pela mesma razão da decisão 8.1, e com um ganho que só aparece depois de esperar por um
+cluster algumas vezes.
+
+Uma consulta de análise erra de dois jeitos. Ela não roda, e a sintaxe acusa. Ou ela roda e
+responde outra coisa, e aí só dado sintético com resposta conhecida acusa.
+
+Com o SQL em `analises.py`, `tests/test_analises_spark.py` monta cenários de quatro ou cinco
+linhas em views temporárias e verifica a resposta. Um repositório com um autor dominante tem
+de dar bus factor 1; quatro autores com um commit cada têm de dar 2. São verificações que se
+lê a olho nu, e é isso que as torna confiáveis como referência.
+
+O ganho de tempo é secundário mas real: erro de sintaxe descoberto na plataforma custa
+minutos de espera por cluster; descoberto aqui custa segundos.
+
+Há um efeito de projeto além do de teste. As três correções da seção 10.6, que separam
+leitura correta de leitura ingênua, ficaram declaradas uma vez como constante do módulo, em
+vez de repetidas em cada consulta. Uma delas mudar de valor é uma edição, não uma varredura.
+
 ---
 
 ## 9. Diário de bordo
@@ -1131,6 +1160,7 @@ Nenhum dos dois veio de execução. Apareceram ao ler o código que o endpoint n
 | 5 | Gold: `fct_commit` e `fct_repo_snapshot` | Fato de transação, snapshot periódico, aditividade | ✅ concluída |
 | 6 | Endpoint `issues` + `fct_issue` | Snapshot acumulado, dimensão conformada, coleta convergente sem `until` | ✅ concluída |
 | 7 | CI | GitHub Actions, grupos de dependência, matriz de versões | ✅ concluída |
+| 8 | As perguntas da seção 2 respondidas | Consulta analítica sobre star schema, bus factor, leitura com limite declarado | ✅ concluída |
 
 ### 10.2 Detalhe da Etapa 1 (concluída)
 
@@ -1554,7 +1584,33 @@ Junto dela saiu uma correção pendente havia semanas. `python-dotenv` estava de
 dependência de execução e é usado só pelo `conftest.py`, para ler o `HADOOP_HOME` da máquina.
 No Databricks ele era instalado sem necessidade; a separação dos grupos resolveu de passagem.
 
-### 10.9 Convenção de mensagens de commit
+### 10.9 Detalhe da Etapa 8 (concluída)
+
+O projeto tinha um instrumento sem uso. Quatro camadas, três tipos de fato, dimensão
+conformada e SCD2, e nenhuma das perguntas da seção 2.3 respondida em lugar nenhum. A
+pergunta central da seção 2.2, sobre quais ferramentas estão morrendo, também não.
+
+| Sub-passo | Entrega |
+|---|---|
+| 8.1 | `analises.py`: as consultas das quatro perguntas filhas |
+| 8.2 | `painel_de_saude`: os sinais lado a lado, que é a pergunta central |
+| 8.3 | Bateria contra o motor, com cenários de resposta conhecida |
+| 8.4 | `notebooks/11_analises.py`, com como ler cada tabela |
+
+Duas decisões de conteúdo merecem registro.
+
+**O painel não tem coluna de veredito.** Seria fácil combinar os sinais num índice de saúde
+de 0 a 100, e seria pior: bus factor 1 com ritmo alto é um risco diferente de bus factor 12
+com ritmo caindo, e um número só os igualaria. O painel põe os sinais lado a lado e deixa a
+leitura com quem lê.
+
+**O que os números não sustentam ficou escrito junto deles**, no fim do notebook. A janela é
+de 90 dias e "morrendo" é julgamento sobre tendência longa; a série de fotos é curta; commit
+não é a única forma de manter um projeto, e revisão e triagem não aparecem em `fct_commit`;
+e parte do ecossistema, os projetos Apache em particular, conduz discussão fora do GitHub.
+Leitura sem limite declarado é pior que leitura ausente.
+
+### 10.10 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -1567,7 +1623,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.10 Regras de manutenção deste documento
+### 10.11 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8. Registre
@@ -1576,7 +1632,7 @@ Conventional Commits:
 4. Se uma decisão for revertida, não apague: registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
 
-### 10.11 Melhorias planejadas
+### 10.12 Melhorias planejadas
 
 Três itens desta lista saíram porque foram feitos: a truncagem visível com recuperação do
 histórico (seção 5.7), o Secret Scope (8.7) e o GitHub Actions (8.11). O que resta:
