@@ -137,23 +137,53 @@ display(
 # MAGIC %md
 # MAGIC ### Contagem de controle da dim_autor
 # MAGIC
-# MAGIC Autores distintos na silver, pela mesma regra de chave, mais o membro
+# MAGIC A conta e contra **as duas silvers**, e nao so contra commits. A
+# MAGIC dimensao e conformada: ela serve `fct_commit` e `fct_issue`, entao a
+# MAGIC referencia e a uniao das chaves naturais dos dois lados, mais o membro
 # MAGIC desconhecido.
+# MAGIC
+# MAGIC Quem commita e abre issue aparece uma vez so, porque a chave por conta e
+# MAGIC a mesma nos dois. E a interseccao que mostra isso funcionando.
 
 # COMMAND ----------
 
-esperado = spark.sql(
+composicao = spark.sql(
     f"""
-    SELECT count(DISTINCT coalesce(cast(github_id AS STRING), autor_email)) AS n
-    FROM {silver.TABELA_COMMITS}
+    WITH de_commits AS (
+        SELECT DISTINCT coalesce(cast(github_id AS STRING), autor_email) AS chave
+        FROM {silver.TABELA_COMMITS}
+    ),
+    de_issues AS (
+        SELECT DISTINCT cast(autor_id AS STRING) AS chave
+        FROM {silver_issues.TABELA_ISSUES}
+        WHERE autor_id IS NOT NULL
+    ),
+    commits_validos AS (
+        SELECT chave FROM de_commits WHERE chave IS NOT NULL
+    )
+    SELECT
+        (SELECT count(*) FROM commits_validos) AS em_commits,
+        (SELECT count(*) FROM de_issues)       AS em_issues,
+        (SELECT count(*) FROM (
+            SELECT chave FROM commits_validos INTERSECT SELECT chave FROM de_issues
+        )) AS em_ambos,
+        (SELECT count(*) FROM (
+            SELECT chave FROM commits_validos UNION SELECT chave FROM de_issues
+        )) AS uniao
     """
-).collect()[0]["n"]
+).collect()[0]
 
-print(f"chaves distintas na silver : {esperado}")
-print(f"linhas na dimensao         : {linhas_autor}")
-print(f"diferenca (esperada: 1)    : {linhas_autor - esperado}")
+esperado = composicao["uniao"]
 
-assert linhas_autor - esperado == 1, "a dimensao nao corresponde a silver"
+print(f"chaves vindas de commits : {composicao['em_commits']}")
+print(f"chaves vindas de issues  : {composicao['em_issues']}")
+print(f"presentes nos dois       : {composicao['em_ambos']}")
+print(f"uniao (a referencia)     : {esperado}")
+print()
+print(f"linhas na dimensao       : {linhas_autor}")
+print(f"diferenca (esperada: 1)  : {linhas_autor - esperado}")
+
+assert linhas_autor - esperado == 1, "a dimensao nao corresponde as duas silvers"
 
 # COMMAND ----------
 
