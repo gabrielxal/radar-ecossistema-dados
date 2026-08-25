@@ -51,6 +51,94 @@ expõe como escolha, e não embutidas numa consulta direta sobre a camada silver
 
 O detalhamento está em [`docs/PROJETO.md`](docs/PROJETO.md), seção 10.6.
 
+### Onde há risco de concentração de manutenção
+
+Bus factor é quantas pessoas concentram metade dos commits. O nome vem de quantas
+precisariam ser atropeladas por um ônibus para o projeto parar.
+
+| Repositório | Bus factor | Autores em 90d | Commits em 90d |
+|---|---|---|---|
+| great-expectations | **1** | 13 | 93 |
+| trino | 3 | 58 | 826 |
+| dagster | 4 | 40 | 346 |
+| hudi | 4 | 44 | 388 |
+| duckdb | 4 | 143 | 5.657 |
+| prefect | 5 | 48 | 126 |
+| polars | 5 | 64 | 495 |
+| sqlfluff | 7 | 74 | 268 |
+| datahub | 10 | 95 | 1.095 |
+| spark | 11 | 186 | 1.555 |
+| dbt-core | 12 | 63 | 946 |
+| delta | 12 | 73 | 382 |
+| iceberg | 12 | 98 | 395 |
+| airflow | 16 | 324 | 2.010 |
+
+O `great_expectations` tem uma pessoa respondendo por metade dos commits num time de 13. É o
+único ponto único de falha da lista.
+
+`duckdb` chama atenção pelo oposto: 143 contribuidores e apenas 4 concentram metade, com
+5.657 commits no período. É o núcleo mais denso e ao mesmo tempo o repositório mais ativo,
+por larga margem.
+
+### Acelerando ou desacelerando
+
+A pergunta é sobre volume **e** sobre volume por pessoa, porque as duas colunas podem
+discordar. Comparando dois períodos de 45 dias:
+
+| Repositório | Volume | Por autor | O que é |
+|---|---|---|---|
+| dagster | **-52%** | -11% | time e produção caindo juntos |
+| great-expectations | **+79%** | -11% | time dobrou; a queda por autor é gente nova entrando |
+| prefect | -18% | -48% | 33 pessoas produzindo 1,7 commit cada |
+| iceberg | +17% | +23% | menos gente entregando mais |
+| airflow | -10% | -8% | estável |
+
+O `dagster` é o único onde as duas colunas caem forte junto, e é o sinal mais claro de
+declínio no conjunto.
+
+O `great_expectations` mostra por que ler só a coluna da direita engana: `-11%` por autor
+parece deterioração, e o volume quase dobrou.
+
+**Um confundidor declarado:** onze dos catorze têm variação por autor negativa. As janelas
+são 27/05 a 11/07 e 11/07 a 25/08, e a segunda pega agosto inteiro, mês de férias no
+hemisfério norte de onde vem a maior parte destes contribuidores. Boa parte da queda
+generalizada é provavelmente sazonal. Isso não afeta os casos extremos, mas impede ler
+qualquer `-5%` como sinal.
+
+### Fechar rápido não é o mesmo que dar conta
+
+Duas medidas com significados opostos, nos repositórios cujo histórico de issues foi coletado
+por inteiro:
+
+| Repositório | Aberto | Mediana até fechar | Idade do backlog aberto |
+|---|---|---|---|
+| sqlfluff | 8% | **12 dias** | **1.216 dias** |
+| dagster | 14% | **36 dias** | **1.467 dias** |
+| delta | 19% | 109 dias | 342 dias |
+| hudi | 24% | 207 dias | 268 dias |
+
+`sqlfluff` e `dagster` fecham rápido e carregam backlog de três a quatro anos: triam o fácil e
+deixam o resto. `hudi` e `delta` fecham devagar com backlog novo: trabalham a fila em ordem.
+
+Olhando só a coluna do meio, `sqlfluff` pareceria três vezes mais saudável que `delta`. É por
+isso que a consulta tem as duas.
+
+### Quem reporta e quem corrige são populações diferentes
+
+| | |
+|---|---|
+| Autores de commit (90 dias) | 1.332 |
+| Autores de issue (histórico) | 22.893 |
+| Presentes nos dois | 542 |
+
+Dos que commitaram no período, 41% também abriram issue. O caminho inverso não é
+interpretável, porque as janelas são assimétricas: quem commitou em 2019 e abriu issue em 2019
+aparece só do lado das issues.
+
+O que fica de pé é a consequência de projeto: sem uma dimensão de autor conformada entre os
+dois fatos, 95% da população que participa cairia no membro desconhecido, e a pergunta sobre
+concentração de manutenção não teria como ser respondida fora do núcleo.
+
 ## O que deu errado no caminho
 
 Estas duas entradas são o motivo de o projeto existir em forma de documento, e não só de

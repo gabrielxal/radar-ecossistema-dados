@@ -253,7 +253,7 @@ def _motivo():
 
     Um registro fora do contrato nao e descartado nem interrompe a carga: e
     desviado com o motivo anotado. Descartar quebraria a contagem de controle
-    sem deixar rastro; abortar deixaria treze repositorios reféns de um.
+    sem deixar rastro; abortar deixaria treze repositorios refens de um.
     """
     from pyspark.sql import functions as F
 

@@ -16,18 +16,13 @@
 # MAGIC %md
 # MAGIC ## Duas particularidades deste endpoint
 # MAGIC
-# MAGIC **A API devolve pull requests junto.** Um PR e uma issue com um campo a
-# MAGIC mais. A bronze guarda os dois, porque e copia fiel do endpoint; a silver
-# MAGIC separa em duas tabelas.
+# MAGIC A API devolve pull requests junto com as issues, e a silver os separa em
+# MAGIC duas tabelas em vez de descartar os primeiros.
 # MAGIC
-# MAGIC **A coleta e crescente.** `/issues` nao aceita `until`, entao o backfill
-# MAGIC em janelas usado em commits nao serve aqui. No lugar dele vem
-# MAGIC `direction=asc`: a lista comeca no registro mais antigo depois do
-# MAGIC watermark e caminha para frente, entao o teto de paginas corta os mais
-# MAGIC recentes, que sao exatamente os que a execucao seguinte busca.
-# MAGIC
-# MAGIC Isso torna a primeira carga um backfill retomavel: se ela nao terminar,
-# MAGIC a proxima continua de onde parou, sem deixar buraco.
+# MAGIC A coleta e crescente e nao decrescente, porque `/issues` nao aceita
+# MAGIC `until`. O efeito pratico esta no `PARC` da saida abaixo: truncar aqui
+# MAGIC nao perde historico, so adia. O mecanismo esta em `Endpoint.ordem_crescente`
+# MAGIC e na secao 5.7.
 
 # COMMAND ----------
 
@@ -174,15 +169,6 @@ print(f"quota gasta: {quota_inicial - sonda()}")
 for r in resultados:
     if r.erro:
         print(f"ERRO em {r.repo}: {r.erro}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Truncagem aqui nao e a mesma da secao 5.7
-# MAGIC
-# MAGIC Em commits, uma coleta truncada deixa historico inalcancavel atras do
-# MAGIC watermark. Em issues, o que ficou de fora esta a frente, e a proxima
-# MAGIC execucao alcanca. `PARC` significa backfill em andamento, nao perda.
 
 # COMMAND ----------
 

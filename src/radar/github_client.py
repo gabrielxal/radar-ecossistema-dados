@@ -1,4 +1,23 @@
-"""Cliente HTTP da API do GitHub. Nao depende de Spark nem do Databricks."""
+"""Cliente HTTP da API do GitHub. Nao depende de Spark nem do Databricks.
+
+Escrito no lugar de uma biblioteca pronta pelas razoes da secao 3.4: o que este
+projeto exercita e justamente paginacao, rate limit e requisicao condicional, e
+uma biblioteca esconderia os tres.
+
+O que o modulo garante a quem o usa:
+
+- toda resposta vira `Resposta`, com ETag, quota e `link_next` ja extraidos dos
+  cabecalhos, entao nenhum chamador precisa conhecer HTTP
+- falha transitoria (rede, 429, 5xx) e retentada com backoff exponencial e
+  jitter, respeitando `Retry-After` e o reset da quota quando a API os envia
+- falha definitiva (4xx que nao 429) levanta `ErroGitHub` sem retentar, porque
+  repetir requisicao malformada so gasta quota
+- `paginar()` avisa quando parou pelo teto de paginas, em vez de apenas parar
+
+O ultimo item nao estava no desenho original. Ele existe por causa do defeito
+da secao 5.7, e e o que separa coleta parcial detectavel de coleta parcial
+silenciosa.
+"""
 
 from __future__ import annotations
 

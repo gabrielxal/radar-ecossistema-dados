@@ -1,13 +1,11 @@
 """Pecas comuns a todas as silvers.
 
-Estas funcoes nasceram dentro de `silver.py`, que e a silver de commits, e
-passaram a ser importadas de la por `silver_repositorios.py`. O nome do modulo
-de origem passou a mentir sobre o alcance delas: nao ha nada de commit em
-aparar espaco ou em normalizar dominio fechado.
+Nasceram em `silver.py` e passaram a ser importadas de la por
+`silver_repositorios.py`, momento em que o nome do modulo de origem passou a
+mentir sobre o alcance delas.
 
-O que fica aqui e o que vale para qualquer endpoint. O que depende do formato
-de um payload especifico, como o schema e a classificacao para quarentena,
-continua no modulo do endpoint.
+Fica aqui o que vale para qualquer endpoint. Schema e classificacao para
+quarentena dependem do payload e ficam no modulo do endpoint.
 """
 
 from __future__ import annotations
@@ -19,14 +17,10 @@ COLUNA_DADOS = "dados"
 
 
 def parsear(df, schema: str, coluna: str = "payload", destino: str = COLUNA_DADOS):
-    """Aplica o schema declarado ao payload, preservando as demais colunas.
+    """Aplica o schema do endpoint ao payload, preservando as demais colunas.
 
-    Campo do JSON ausente no schema e ignorado; campo do schema ausente no
-    JSON vira NULL. Nenhum dos dois interrompe a leitura: o que nao couber no
-    contrato e tratado no passo de quarentena.
-
-    O schema entra por parametro em vez de ficar fixo no modulo, porque cada
-    endpoint declara o seu.
+    Leitura permissiva de proposito: o que nao couber no contrato vira NULL e
+    e desviado depois, no passo de quarentena, em vez de interromper a carga.
     """
     from pyspark.sql import functions as F
 
@@ -40,8 +34,8 @@ def parsear(df, schema: str, coluna: str = "payload", destino: str = COLUNA_DADO
 def texto(coluna):
     """Apara espacos e transforma string vazia em NULL.
 
-    `''` e NULL significam a mesma ausencia, mas comparam diferente: um
-    `WHERE campo IS NULL` deixaria as vazias de fora, sem aviso.
+    As duas dizem a mesma ausencia, e um `WHERE campo IS NULL` deixaria as
+    vazias de fora sem avisar.
     """
     from pyspark.sql import functions as F
 
@@ -49,10 +43,10 @@ def texto(coluna):
 
 
 def categoria(coluna):
-    """Texto normalizado para minusculas. Vale para coluna de dominio fechado.
+    """Minusculas, para coluna de dominio fechado.
 
-    Sem isso `User`, `user` e `USER` viram tres categorias da mesma coisa, e
-    nenhum GROUP BY corrige depois.
+    `User` e `user` viram duas categorias da mesma coisa, e nenhum GROUP BY
+    corrige depois.
     """
     from pyspark.sql import functions as F
 

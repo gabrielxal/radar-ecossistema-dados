@@ -1144,6 +1144,31 @@ Nenhum dos dois veio de execução. Apareceram ao ler o código que o endpoint n
 | 24 | `qtd_rotulos` valendo `-1` numa issue sem rótulos, com guarda escrita | `size(NULL)` devolve `-1` em modo legado, e não `NULL`. A guarda usava `coalesce`, que só age sobre `NULL`, então nunca disparou | A entrada 10 já registrava esse comportamento, e mesmo assim a guarda saiu errada, porque foi escrita contra a intuição do defeito e não contra o defeito. Conhecer a armadilha não protege se a proteção mira outra coisa. O que pegou foi o teste que exercitava a ausência do campo, e não a leitura do código |
 | 25 | `first(coluna, ignorenulls=True)` devolvendo `NULL` sobre partição que tinha valor | A função de janela estava no `select` depois do `where` que reduzia a partição a uma linha. O `ignorenulls` procurava em uma linha só, que era justamente a nula | Função de janela enxerga o que existe no momento em que ela é avaliada, não a partição original. Ordem de operações em DataFrame não é detalhe de estilo: filtrar antes de janelar muda o resultado sem mudar o código da janela |
 
+### 9.8 O que acrescentar um fato quebrou fora dele
+
+Quatro defeitos com a mesma forma: **o código novo estava certo, e o que assumia coisas sobre
+ele ficou velho.**
+
+Acrescentar `fct_issue` criou dependências que não aparecem em nenhuma assinatura de função.
+`montar_fct_issue` não menciona `dim_tempo` e depende do intervalo dela; a conferência de
+`dim_autor` não menciona issues e passou a estar errada por causa delas.
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 26 | `AssertionError: a dimensao nao corresponde a silver`, com 10.137 linhas de diferença | A conferência comparava `dim_autor` contra a silver de commits. A dimensão virou conformada na mesma etapa e passou a ler também de issues | Verificação envelhece em silêncio quando mora em notebook, que é a única parte do projeto sem teste. A diferença de 10.137 não era erro: era exatamente a população que a dimensão conformada foi criada para alcançar |
+| 27 | `fato_sem_dimensao_de_tempo=79794`, bloqueante | `dim_tempo` era gerada entre a menor e a maior data de commit, e a janela é de 90 dias. Issue aberta em 2015 produz chave que o calendário não tem | A dimensão de tempo precisa cobrir toda data que qualquer fato referencia. Com chave calculada em vez de buscada (4.2), a falta é silenciosa: a junção perde a linha sem erro, e a bateria era a única rede |
+| 28 | Intervalo do calendário nascendo um dia deslocado | `collect()` converte TIMESTAMP para o fuso do driver, e meia-noite UTC recua um dia numa máquina a oeste. O calendário dependeria de quem o gerou | Repetição da entrada 12, agora dentro do código e não do teste. A correção foi devolver DATE, que não carrega fuso, em vez de ajustar a comparação |
+| 29 | Repositórios com `registros: 0` na tabela de controle e milhares de linhas na silver | A coluna é da última execução, não acumulada. A sentinela respondeu `304` porque o backfill já havia terminado antes | Coluna que registra evento sendo lida como se registrasse estado. O conserto não foi na coluna: foi uma consulta que junta controle e silver e devolve `confiavel`, porque a pergunta real era "posso usar este repositório?" |
+
+A lição de conjunto tem nome fora deste projeto: acoplamento sem declaração. Nenhuma das
+quatro dependências estava escrita em lugar nenhum, e as quatro só apareceram quando o dado
+real passou por elas.
+
+O que mudou o custo foi onde cada verificação morava. As que estavam em `src/` com teste
+falharam na máquina local, em segundos. As que estavam em `assert` de notebook falharam no
+Databricks, depois de esperar cluster. É o argumento da decisão 8.1 outra vez, e foi o que
+motivou 8.12.
+
 ---
 
 ## 10. Roadmap e manutenção
@@ -1631,6 +1656,12 @@ Conventional Commits:
 3. Todo problema que custou mais de 30 minutos vira uma linha na seção 9
 4. Se uma decisão for revertida, não apague: registre a reversão e o motivo. Decisão
    revertida com justificativa é mais valiosa que decisão que nunca existiu
+5. **Prosa dentro de arquivo `.py` é ASCII**, em comentário, docstring e célula de
+   notebook. Este documento e o README usam acento normalmente. A regra existe porque
+   arquivo de código atravessa terminal, `diff` e log de job com codificação que nem
+   sempre é UTF-8, e caractere quebrado num comentário é ruído permanente. Dado de
+   teste é exceção: `"José"` num payload sintético existe justamente para exercitar o
+   acento
 
 ### 10.12 Melhorias planejadas
 

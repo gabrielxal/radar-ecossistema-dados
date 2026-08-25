@@ -152,13 +152,9 @@ def tipar(df, momento: datetime):
         # `transform` sobre array de struct devolve array de string. O nome do
         # rotulo e o que classifica a issue; a cor e o id nao respondem nada.
         F.transform(dados["labels"], lambda r: r["name"]).alias("rotulos"),
-        # `size(NULL)` devolve -1 em modo legado, e nao NULL, entao `coalesce`
-        # nao protege: a guarda precisa testar o array antes de medi-lo.
-        # Diario de bordo 10, repetido aqui e pego pelo teste.
-        #
-        # Zero e nao NULL na ausencia: a medida e aditiva, e somar NULL nao e
-        # o mesmo que somar zero. A API sempre devolve `labels: []` numa issue
-        # bem formada, entao a chave ausente significa lista vazia.
+        # `coalesce` sobre `size` nao protege: em modo legado `size(NULL)` da
+        # -1, e nao NULL. Diario de bordo 10, repetido aqui e pego pelo teste.
+        # Zero e nao NULL porque a medida e aditiva.
         _tamanho(dados["labels"]).alias("qtd_rotulos"),
         _tamanho(dados["assignees"]).alias("qtd_responsaveis"),
         silver_comum.texto(usuario["login"]).alias("autor_login"),

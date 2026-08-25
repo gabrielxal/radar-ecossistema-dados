@@ -1,22 +1,20 @@
 """As consultas que respondem as perguntas da secao 2.
 
-O modelo dimensional foi construido para responder quatro perguntas, e ate
-aqui nenhuma delas tinha resposta escrita. Este modulo e onde elas ficam.
+As quatro primeiras perguntas filhas da secao 2.3, mais a pergunta central da
+2.2. A quinta foi respondida na Etapa 5 e esta na secao 10.6.
 
-Consulta mora aqui, e nao solta no notebook, pelo mesmo motivo da decisao 8.1:
-o que esta em `src/` pode ser exercitado contra o motor antes de rodar no
-Databricks. Uma consulta com erro de sintaxe descoberta na plataforma custa
-minutos de espera; descoberta aqui custa segundos.
+Consulta mora aqui e nao solta no notebook, pelo motivo da decisao 8.12: o que
+esta em `src/` pode ser exercitado contra o motor antes de rodar no Databricks.
 
 Cada funcao devolve SQL como texto e recebe os nomes das tabelas por
-parametro. E o que permite os testes apontarem para views temporarias com dado
-sintetico, sem Delta e sem Unity Catalog.
+parametro, que e o que permite os testes apontarem para views temporarias com
+dado sintetico, sem Delta e sem Unity Catalog.
 """
 
 from __future__ import annotations
 
 from radar import controle, gold
-from radar import silver_issues as silver_issues_modulo
+from radar import silver_issues as modulo_issues
 
 # --------------------------------------------------------------------------
 # As correcoes que separam leitura correta de leitura ingenua
@@ -47,14 +45,13 @@ def _tabelas(
     silver_issues=None, controle_ingestao=None,
 ):
     """Nomes das tabelas, com o catalogo real como padrao."""
-    silver_issues_padrao = silver_issues_modulo.TABELA_ISSUES
     return {
         "fato": fato or gold.TABELA_FCT_COMMIT,
         "repositorio": repositorio or gold.TABELA_REPOSITORIO,
         "autor": autor or gold.TABELA_AUTOR,
         "tempo": tempo or gold.TABELA_TEMPO,
         "issue": issue or gold.TABELA_FCT_ISSUE,
-        "silver_issues": silver_issues or silver_issues_padrao,
+        "silver_issues": silver_issues or modulo_issues.TABELA_ISSUES,
         "controle": controle_ingestao or controle.TABELA_CONTROLE,
     }
 
