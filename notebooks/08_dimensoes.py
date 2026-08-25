@@ -61,28 +61,36 @@ print("pre-voo ok")
 # MAGIC %md
 # MAGIC ## 1. dim_tempo
 # MAGIC
-# MAGIC O intervalo cobre `autorado_em`, e nao apenas `commitado_em`. A
-# MAGIC diferenca entre as duas chega a 562 dias no dado real: um fato com
-# MAGIC duas chaves de data apontaria para um dia inexistente na dimensao se o
-# MAGIC intervalo comecasse na data de commit mais antiga.
+# MAGIC O intervalo cobre **as tres silvers**, e nao so commits.
+# MAGIC
+# MAGIC Duas razoes se somam. Dentro de commits, `autorado_em` e `commitado_em`
+# MAGIC chegam a 562 dias de distancia no dado real, entao um calendario
+# MAGIC derivado so da data de commit ja deixaria orfao o papel de autoria.
+# MAGIC
+# MAGIC E `fct_issue` desloca o inicio em anos: issue aberta muito antes da
+# MAGIC janela de 90 dias de commits produz uma chave que nenhum calendario
+# MAGIC derivado de commits teria.
+# MAGIC
+# MAGIC Chave de tempo e calculada e nao buscada, decidido em 4.2. O preco e
+# MAGIC que a juncao perde a linha em silencio quando a data cai fora, e so a
+# MAGIC bateria dos fatos acusa.
 
 # COMMAND ----------
 
-limites = spark.sql(
-    f"""
-    SELECT least(min(autorado_em), min(commitado_em)) AS primeiro,
-           greatest(max(autorado_em), max(commitado_em)) AS ultimo
-    FROM {silver.TABELA_COMMITS}
-    """
-).collect()[0]
+primeiro, ultimo = gold.limites_do_calendario(
+    spark.table(silver.TABELA_COMMITS),
+    issues=spark.table(silver_issues.TABELA_ISSUES),
+    repositorios=spark.table(silver_repositorios.TABELA_REPOSITORIOS),
+)
 
 # Folga para tras absorve dado mais antigo numa carga futura; para a frente,
 # permite que o fato de amanha encontre sua linha.
-INICIO = (limites["primeiro"] - timedelta(days=30)).date()
-FIM = (limites["ultimo"] + timedelta(days=365)).date()
+INICIO = primeiro - timedelta(days=30)
+FIM = ultimo + timedelta(days=365)
 
-print("commit mais antigo :", limites["primeiro"])
-print("intervalo gerado   :", INICIO, "a", FIM)
+print("data mais antiga :", primeiro)
+print("data mais recente:", ultimo)
+print("intervalo gerado :", INICIO, "a", FIM)
 
 # COMMAND ----------
 

@@ -255,3 +255,112 @@ def test_colunas_batem_com_o_ddl(cenario):
     assert tuple(fato.columns) == gold.COLUNAS_FCT_ISSUE
     for coluna in gold.COLUNAS_FCT_ISSUE:
         assert coluna in gold.ddl_fct_issue(), coluna
+
+
+# --------------------------------------------------------------------------
+# O intervalo que dim_tempo precisa cobrir
+# --------------------------------------------------------------------------
+
+ESQUEMA_DATAS = "autorado_em STRING, commitado_em STRING"
+
+
+@pytest.fixture
+def commits_com_datas(spark):
+    from pyspark.sql import functions as F
+
+    def constroi(pares):
+        df = spark.createDataFrame(pares, ESQUEMA_DATAS)
+        for coluna in ("autorado_em", "commitado_em"):
+            df = df.withColumn(coluna, F.to_timestamp(coluna))
+        return df
+
+    return constroi
+
+
+@pytest.fixture
+def fotos(spark):
+    def constroi(dias):
+        return spark.createDataFrame([(d,) for d in dias], "dt STRING")
+
+    return constroi
+
+
+def test_issue_antiga_puxa_o_inicio_do_calendario(commits_com_datas, issues):
+    """O defeito real: 79.794 chaves de tempo orfas no primeiro fct_issue.
+
+    A janela de commits e de 90 dias; uma issue aberta em 2015 produz uma
+    chave que um calendario derivado de commits nunca teria.
+    """
+    primeiro, _ = gold.limites_do_calendario(
+        commits_com_datas([("2026-06-01T10:00:00", "2026-06-02T10:00:00")]),
+        issues=issues([issue(1, aberta="2015-03-12T10:00:00Z")]),
+    )
+    assert primeiro.year == 2015
+
+
+def test_sem_issues_o_intervalo_vem_so_de_commits(commits_com_datas):
+    """O parametro e opcional: o comportamento anterior nao mudou."""
+    primeiro, ultimo = gold.limites_do_calendario(
+        commits_com_datas([("2026-06-01T10:00:00", "2026-06-02T10:00:00")])
+    )
+    assert primeiro.isoformat() == "2026-06-01"
+    assert ultimo.isoformat() == "2026-06-02"
+
+
+def test_data_de_autoria_conta_mesmo_sendo_anterior(commits_com_datas):
+    """562 dias de diferenca no dado real, medidos na etapa 4."""
+    primeiro, _ = gold.limites_do_calendario(
+        commits_com_datas([("2024-01-01T10:00:00", "2026-06-02T10:00:00")])
+    )
+    assert primeiro.year == 2024
+
+
+def test_issue_em_aberto_nao_anula_o_limite(commits_com_datas, issues):
+    """`fechada_em` NULL nao pode fazer min/max devolverem nada."""
+    primeiro, ultimo = gold.limites_do_calendario(
+        commits_com_datas([("2026-06-01T10:00:00", "2026-06-02T10:00:00")]),
+        issues=issues([issue(1, aberta="2020-01-01T10:00:00Z", fechada=None)]),
+    )
+    assert primeiro.year == 2020
+    assert ultimo is not None
+
+
+def test_fct_issue_vazia_nao_estreita_o_intervalo(spark, commits_com_datas, issues):
+    primeiro, ultimo = gold.limites_do_calendario(
+        commits_com_datas([("2026-06-01T10:00:00", "2026-06-02T10:00:00")]),
+        issues=issues([]),
+    )
+    assert primeiro.isoformat() == "2026-06-01"
+    assert ultimo.isoformat() == "2026-06-02"
+
+
+def test_dia_da_foto_entra_no_intervalo(commits_com_datas, fotos):
+    """`dt` e STRING na silver e vira DATE no fato pelo mesmo `to_date`."""
+    _, ultimo = gold.limites_do_calendario(
+        commits_com_datas([("2026-06-01T10:00:00", "2026-06-02T10:00:00")]),
+        repositorios=fotos(["2026-12-25"]),
+    )
+    assert ultimo.isoformat() == "2026-12-25"
+
+
+def test_todo_marco_de_issue_cabe_no_calendario_gerado(spark, commits_com_datas, issues):
+    """A invariante que a bateria dos fatos verifica de fora, aqui na origem."""
+    from datetime import timedelta
+
+    dados = issues([
+        issue(1, aberta="2015-03-12T10:00:00Z", fechada="2016-01-05T10:00:00Z", estado="closed"),
+        issue(2, aberta="2024-07-01T10:00:00Z"),
+    ])
+    primeiro, ultimo = gold.limites_do_calendario(
+        commits_com_datas([("2026-06-01T10:00:00", "2026-06-02T10:00:00")]),
+        issues=dados,
+    )
+    tempo = gold.gerar_dim_tempo(
+        spark, primeiro - timedelta(days=30), ultimo + timedelta(days=365)
+    )
+    chaves = {l["sk_tempo"] for l in tempo.select("sk_tempo").collect()}
+
+    for linha in dados.collect():
+        assert int(linha["aberta_em"].strftime("%Y%m%d")) in chaves
+        if linha["fechada_em"]:
+            assert int(linha["fechada_em"].strftime("%Y%m%d")) in chaves

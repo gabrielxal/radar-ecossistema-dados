@@ -91,6 +91,53 @@ COMMENT 'Dimensao de tempo, gerada. Um dia por linha, sem lacunas.'
 """
 
 
+def limites_do_calendario(commits, issues=None, repositorios=None):
+    """O intervalo que `dim_tempo` precisa cobrir. Devolve duas datas.
+
+    Toda chave de data de todo fato tem de existir na dimensao. As chaves sao
+    calculadas em vez de buscadas, decidido em 4.2, e o preco dessa decisao e
+    que nada avisa quando uma cai fora do intervalo: a juncao simplesmente
+    perde a linha, e so a bateria acusa.
+
+    O intervalo nao pode vir so de commits, e a diferenca nao e pequena. Uma
+    issue aberta anos antes do commit mais antigo da janela de 90 dias produz
+    uma chave que um calendario derivado de commits nunca teria.
+
+    Esta e a dependencia que acrescentar um fato cria e que nao aparece em
+    nenhuma assinatura de funcao: `montar_fct_issue` nao menciona `dim_tempo`,
+    e mesmo assim depende do intervalo dela.
+    """
+    from pyspark.sql import functions as F
+
+    datas = commits.select(F.col("autorado_em").alias("d")).union(
+        commits.select(F.col("commitado_em"))
+    )
+
+    if issues is not None:
+        datas = datas.union(issues.select(F.col("aberta_em")))
+        datas = datas.union(issues.select(F.col("fechada_em")))
+
+    if repositorios is not None:
+        # `dt` e STRING na silver, e vira DATE no fato pelo mesmo `to_date`.
+        datas = datas.union(
+            repositorios.select(F.to_date("dt").cast("timestamp"))
+        )
+
+    # `min` e `max` ignoram nulo, entao issue aberta sem fechamento e tabela
+    # vazia nao estreitam nem anulam o intervalo.
+    #
+    # `to_date` antes do `collect` nao e detalhe. TIMESTAMP colhido vira o fuso
+    # do driver, e meia-noite UTC recua um dia num driver a oeste: o calendario
+    # nasceria deslocado conforme a maquina que o gerou. DATE nao carrega fuso.
+    # Diario de bordo 12.
+    limite = datas.select(
+        F.to_date(F.min("d")).alias("primeiro"),
+        F.to_date(F.max("d")).alias("ultimo"),
+    ).collect()[0]
+
+    return limite["primeiro"], limite["ultimo"]
+
+
 def gerar_dim_tempo(spark, inicio: date, fim: date):
     """Gera um dia por linha entre as duas datas, inclusive.
 
