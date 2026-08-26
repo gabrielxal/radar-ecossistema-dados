@@ -13,9 +13,47 @@ sobre a saúde desses projetos.
 > Quais ferramentas do ecossistema de engenharia de dados estão saudáveis, e quais estão
 > morrendo? Onde há risco de concentração de manutenção?
 
-Repositórios acompanhados: `airflow`, `spark`, `dbt-core`, `duckdb`, `polars`, `delta`,
-`dagster`, `prefect`, `trino`, `great_expectations`, `iceberg`, `hudi`, `sqlfluff`,
-`datahub`.
+O recorte é deliberado: um engenheiro de dados analisando as ferramentas de engenharia de
+dados. Sinaliza domínio de mercado, e não apenas domínio de ferramenta.
+
+### Os 14 repositórios, por camada
+
+| Camada | Repositórios | |
+|---|---|---|
+| Orquestração | `airflow`, `dagster`, `prefect` | 3 |
+| Processamento | `spark`, `duckdb`, `polars` | 3 |
+| Formato de tabela | `delta`, `iceberg`, `hudi` | 3 |
+| Transformação | `dbt-core`, `sqlfluff` | 2 |
+| Query federada | `trino` | 1 |
+| Qualidade | `great_expectations` | 1 |
+| Catálogo | `datahub` | 1 |
+
+Três onde existe disputa real, um ou dois onde não existe.
+
+Isso importa para a análise, e não é só arrumação. Comparar `airflow` com `duckdb` diz pouco,
+porque resolvem problemas diferentes. Comparar `delta` com `iceberg` e `hudi` diz muito: são
+três projetos disputando exatamente o mesmo lugar, e bus factor e ritmo entre eles respondem
+qual está ganhando.
+
+Os três trios foram escolhidos com essa propriedade. Orquestração cobre três gerações de
+abordagem; processamento cobre distribuído, embarcado e single-node, que são três respostas ao
+mesmo problema em escalas diferentes.
+
+### O que ficou de fora, e o que isso custa
+
+| Ausente | Efeito na conclusão |
+|---|---|
+| Streaming (`kafka`, `flink`) | metade da disciplina não é medida; tudo aqui é batch |
+| OLAP distribuído (`clickhouse`, `druid`) | `duckdb` e `trino` são query engines, não bancos analíticos |
+| BI (`superset`, `metabase`) | o pipeline termina na camada gold e ninguém consome |
+| Ingestão declarativa (`dlt`, `airbyte`) | a camada EL do stack moderno não aparece |
+
+O escopo é o que torna a pergunta respondível, e também o que limita a resposta. "O ecossistema
+de dados" aqui significa estas sete camadas, não o mercado inteiro.
+
+Databricks e S3 não entram por um motivo diferente: são produtos fechados, sem repositório
+público. Um pipeline que mede saúde de repositório não tem o que medir neles. A peça deles que
+aparece é `delta-io/delta`, aberta em 2019.
 
 ## O que o pipeline já respondeu
 
@@ -107,21 +145,50 @@ qualquer `-5%` como sinal.
 
 ### Fechar rápido não é o mesmo que dar conta
 
-Duas medidas com significados opostos, nos repositórios cujo histórico de issues foi coletado
-por inteiro:
+73.682 issues, com o histórico completo dos catorze. Duas medidas com significados opostos:
+uma olha o que terminou e mede vazão, a outra olha o que não terminou e mede backlog.
 
 | Repositório | Aberto | Mediana até fechar | Idade do backlog aberto |
 |---|---|---|---|
-| sqlfluff | 8% | **12 dias** | **1.216 dias** |
-| dagster | 14% | **36 dias** | **1.467 dias** |
-| delta | 19% | 109 dias | 342 dias |
-| hudi | 24% | 207 dias | 268 dias |
+| dagster | 14% | 36 dias | **1.468 dias** |
+| trino | 30% | 14 dias | **1.255 dias** |
+| sqlfluff | 8% | 12 dias | **1.217 dias** |
+| airflow | 3% | 10 dias | 962 dias |
+| prefect | 10% | 13 dias | 854 dias |
+| polars | 19% | **2 dias** | 628 dias |
+| great_expectations | 1% | 58 dias | 563 dias |
+| dbt-core | 10% | 22 dias | 561 dias |
+| datahub | 18% | 52 dias | 429 dias |
+| delta | 19% | 110 dias | 343 dias |
+| hudi | 24% | 207 dias | 269 dias |
+| iceberg | 10% | 195 dias | 111 dias |
+| spark | 39% | 101 dias | 63 dias |
+| duckdb | 5% | **8 dias** | **35 dias** |
 
-`sqlfluff` e `dagster` fecham rápido e carregam backlog de três a quatro anos: triam o fácil e
-deixam o resto. `hudi` e `delta` fecham devagar com backlog novo: trabalham a fila em ordem.
+Três comportamentos aparecem.
 
-Olhando só a coluna do meio, `sqlfluff` pareceria três vezes mais saudável que `delta`. É por
-isso que a consulta tem as duas.
+**Triagem do fácil.** `dagster`, `trino` e `sqlfluff` fecham em duas semanas e carregam backlog
+de três a quatro anos. O que entra e é simples sai rápido; o resto envelhece.
+
+**Fila em ordem.** `hudi`, `iceberg` e `delta` fecham devagar, entre 110 e 207 dias, e o
+backlog aberto é novo. Demoram mais por issue e deixam menos para trás.
+
+**As duas boas.** `duckdb` é o único com vazão rápida e backlog jovem ao mesmo tempo: fecha em
+8 dias e a issue aberta mediana tem 35. Somado a 5.657 commits em 90 dias, é o repositório mais
+saudável do conjunto por qualquer ângulo medido aqui.
+
+Olhando só a coluna do meio, `polars` pareceria 50 vezes mais eficiente que `hudi`. Olhando só
+a da direita, o oposto. É por isso que a consulta tem as duas.
+
+**Um confundidor a declarar:** projeto que usa bot de fechamento automático por inatividade
+aparece com taxa de abertas baixa e fechamento rápido sem que isso signifique atendimento. O
+`airflow` com 3% de abertas e 10 dias de mediana é o candidato mais provável. A silver guarda
+`motivo_estado`, então `not_planned` separa o fechamento por decisão do fechamento por
+abandono; a verificação ainda não foi feita.
+
+**O `spark` mede outra coisa.** São 100 issues, nenhuma aberta com mais de 176 dias, num
+projeto de 2010. O canal de discussão dele é o JIRA, e o que aparece aqui é recente demais para
+representar o ciclo de vida real.
 
 ### Quem reporta e quem corrige são populações diferentes
 

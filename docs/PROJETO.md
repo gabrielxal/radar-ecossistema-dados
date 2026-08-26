@@ -114,6 +114,38 @@ fosse ilimitada, metade deste projeto não existiria.
 
 A lista vive num único lugar, nunca espalhada pelos notebooks.
 
+#### O critério
+
+Uma camada do stack por linha, e três repositórios nas camadas onde existe disputa real:
+
+| Camada | Repositórios |
+|---|---|
+| Orquestração | `airflow`, `dagster`, `prefect` |
+| Processamento | `spark`, `duckdb`, `polars` |
+| Formato de tabela | `delta`, `iceberg`, `hudi` |
+| Transformação | `dbt-core`, `sqlfluff` |
+| Query federada | `trino` |
+| Qualidade | `great_expectations` |
+| Catálogo | `datahub` |
+
+Os trios são o que dá valor analítico ao conjunto. Comparar `airflow` com `duckdb` diz pouco;
+comparar `delta` com `iceberg` e `hudi` responde qual dos três está ganhando a disputa pelo
+mesmo lugar, e é isso que o bus factor e o ritmo por autor medem.
+
+Registro de como a lista surgiu, porque a seção 2.1 defende começar pela pergunta: os dez
+primeiros vieram de uma sugestão inicial, e `iceberg`, `hudi`, `sqlfluff` e `datahub` entraram
+depois. A estrutura por camada acima descreve o resultado e foi adotada como critério em
+2026-08-25, quando a lista foi revista. Não foi a regra que gerou os dez primeiros.
+
+#### O que ficou de fora
+
+Streaming, OLAP distribuído, BI e ingestão declarativa. São ausências que limitam a conclusão:
+tudo aqui é batch, o pipeline termina na gold sem consumidor, e a camada EL do stack moderno
+não aparece. Uma sondagem de 47 candidatos foi feita em 2026-08-25 e está registrada em 10.12.
+
+Databricks e S3 não entram por outro motivo: são produtos fechados, sem repositório público, e
+um pipeline que mede saúde de repositório não tem o que medir neles.
+
 ---
 
 ## 3. A fonte: API do GitHub
