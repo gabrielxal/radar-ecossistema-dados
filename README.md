@@ -170,8 +170,8 @@ Três comportamentos aparecem.
 **Triagem do fácil.** `dagster`, `trino` e `sqlfluff` fecham em duas semanas e carregam backlog
 de três a quatro anos. O que entra e é simples sai rápido; o resto envelhece.
 
-**Fila em ordem.** `hudi`, `iceberg` e `delta` fecham devagar, entre 110 e 207 dias, e o
-backlog aberto é novo. Demoram mais por issue e deixam menos para trás.
+**Fila em ordem.** `hudi` e `delta` fecham devagar, entre 110 e 207 dias, e o backlog aberto é
+novo. Demoram mais por issue e deixam menos para trás.
 
 **As duas boas.** `duckdb` é o único com vazão rápida e backlog jovem ao mesmo tempo: fecha em
 8 dias e a issue aberta mediana tem 35. Somado a 5.657 commits em 90 dias, é o repositório mais
@@ -180,15 +180,46 @@ saudável do conjunto por qualquer ângulo medido aqui.
 Olhando só a coluna do meio, `polars` pareceria 50 vezes mais eficiente que `hudi`. Olhando só
 a da direita, o oposto. É por isso que a consulta tem as duas.
 
-**Um confundidor a declarar:** projeto que usa bot de fechamento automático por inatividade
-aparece com taxa de abertas baixa e fechamento rápido sem que isso signifique atendimento. O
-`airflow` com 3% de abertas e 10 dias de mediana é o candidato mais provável. A silver guarda
-`motivo_estado`, então `not_planned` separa o fechamento por decisão do fechamento por
-abandono; a verificação ainda não foi feita.
+### Fechar não é o mesmo que resolver
+
+As duas medidas acima ainda deixam uma confusão de pé: projeto que fecha issue parada por
+inatividade aparece com vazão rápida e backlog jovem sem ter atendido ninguém.
+
+A silver guarda `motivo_estado`, e `not_planned` separa o fechamento por decisão do fechamento
+por abandono.
+
+| Repositório | Abandonadas | Resolvidas | Taxa |
+|---|---|---|---|
+| iceberg | 1.691 | 2.224 | **43,2%** |
+| delta | 397 | 1.150 | 25,7% |
+| datahub | 444 | 1.860 | 19,3% |
+| dbt-core | 999 | 4.658 | 17,7% |
+| prefect | 769 | 4.459 | 14,7% |
+| duckdb | 666 | 4.845 | 12,1% |
+| hudi | 245 | 2.414 | 9,2% |
+| polars | 958 | 9.564 | 9,1% |
+| great_expectations | 188 | 1.867 | 9,1% |
+| trino | 460 | 5.141 | 8,2% |
+| airflow | 841 | 10.702 | 7,3% |
+| dagster | 227 | 3.273 | 6,5% |
+| sqlfluff | 56 | 3.382 | **1,6%** |
+
+**Isto refuta uma hipótese registrada antes de medir.** A suspeita era o `airflow`, por ter 3%
+de abertas e mediana de 10 dias. Ele tem a terceira menor taxa de abandono do conjunto: 10.702
+issues resolvidas contra 841 abandonadas. A vazão dele é real.
+
+**O caso é o `iceberg`.** Quase metade do que fecha, fecha por abandono. E isso muda a leitura
+dele na tabela anterior: 195 dias até fechar com o backlog aberto mais jovem dos catorze não é
+fila trabalhada em ordem, é fila expurgada. A issue fica parada meses, é fechada como não
+planejada, e sai do estoque sem ter sido atendida.
+
+`sqlfluff` é o oposto exato, com 1,6%. A mediana de 12 dias dele é resolução de verdade, e o
+backlog de 1.217 dias é acúmulo de verdade.
 
 **O `spark` mede outra coisa.** São 100 issues, nenhuma aberta com mais de 176 dias, num
 projeto de 2010. O canal de discussão dele é o JIRA, e o que aparece aqui é recente demais para
-representar o ciclo de vida real.
+representar o ciclo de vida real. Os 57,6% de abandono dele saem de 59 issues fechadas, amostra
+pequena demais para significar algo.
 
 ### Quem reporta e quem corrige são populações diferentes
 
