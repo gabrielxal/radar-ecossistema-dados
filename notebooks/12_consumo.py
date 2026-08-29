@@ -5,7 +5,7 @@
 # MAGIC Cria as visoes sobre as quais o painel e construido.
 # MAGIC
 # MAGIC O pipeline terminava na gold sem consumidor. O que faltava nao era mais
-# MAGIC uma consulta -- elas ja existem em `src/radar/analises.py` -- e sim um
+# MAGIC uma consulta, porque elas ja existem em `src/radar/analises.py`, e sim um
 # MAGIC lugar estavel de onde um dashboard possa le-las sem carregar copia do
 # MAGIC SQL. E o que `consumo.py` resolve, e o raciocinio esta no docstring do
 # MAGIC modulo.

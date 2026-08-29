@@ -3,9 +3,9 @@
 O projeto inteiro tem 18.673 commits, e nesse volume nenhuma decisao de
 desempenho se prova: tudo cabe numa particao, nenhum shuffle vai a disco, e o
 motor esconde qualquer escolha ruim atras de dados pequenos. Varios
-comentarios do codigo afirmam coisas sobre custo -- o de `bronze.ddl`, sobre
-particionar gerar arquivos pequenos demais, e o de `consumo`, sobre visao
-recalcular barato -- e nenhuma dessas afirmacoes tinha numero atras.
+comentarios do codigo afirmam coisas sobre custo. O de `bronze.ddl` diz que
+particionar geraria arquivos pequenos demais, e o de `consumo` diz que
+recalcular a visao e barato. Nenhum tinha numero atras.
 
 Este modulo existe para trocar as afirmacoes por medidas. Ele nao otimiza
 nada: ele instrumenta.
@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import time
 from dataclasses import dataclass
 from statistics import median
@@ -207,7 +208,14 @@ class Medicao:
         )
 
 
-def medir(spark, nome: str, sql: str, repeticoes: int = 3) -> Medicao:
+def _materializar(spark, sql: str) -> None:
+    """Executa a consulta produzindo toda linha e todo campo, sem gravar."""
+    spark.sql(sql).write.format("noop").mode("overwrite").save()
+
+
+def medir(
+    spark, nome: str, sql: str, repeticoes: int = 3, aquecer: bool = True
+) -> Medicao:
     """Cronometra a consulta com o resultado materializado e descartado.
 
     O `noop` existe para isto: escrever num destino que nao guarda nada obriga
@@ -215,16 +223,30 @@ def medir(spark, nome: str, sql: str, repeticoes: int = 3) -> Medicao:
     a poda que um `count()` provocaria.
 
     Repete porque a primeira execucao paga o que as seguintes nao pagam --
-    plano, metadado, cache de arquivo -- e devolve todas as amostras, para que
+    plano, metadado e cache de arquivo. Devolve todas as amostras, para que
     quem le decida se a diferenca entre a fria e a mediana e o achado.
+
+    **`aquecer` existe por causa de uma medida falsa.** A primeira execucao do
+    experimento comparou a mesma leitura em tres formas de armazenamento e
+    devolveu 0,92s, 0,89s e 0,83s, sugerindo 10% de ganho. Nao havia ganho: a
+    distancia entre a fria e a mediana caiu 0,12, 0,06 e 0,00 na mesma ordem,
+    que e a assinatura da sessao esquentando, e a tabela agrupada tinha um
+    arquivo so, sem nada para o data skipping pular.
+
+    Uma execucao descartada antes de cronometrar poe todos os casos no mesmo
+    regime termico. Sem ela, `comparar` mede a ordem em que os casos foram
+    escritos, e o ultimo sempre parece o melhor.
     """
     if repeticoes < 1:
         raise ValueError("repeticoes precisa ser 1 ou mais")
 
+    if aquecer:
+        _materializar(spark, sql)
+
     amostras = []
     for _ in range(repeticoes):
         inicio = time.perf_counter()
-        spark.sql(sql).write.format("noop").mode("overwrite").save()
+        _materializar(spark, sql)
         amostras.append(time.perf_counter() - inicio)
 
     return Medicao(nome=nome, amostras=tuple(amostras))
@@ -269,13 +291,29 @@ def plano(spark, sql: str, modo: str = "formatted") -> str:
     `DataFrame.explain` imprime em vez de devolver, e a captura de `stdout` e
     o caminho que usa so API publica. A alternativa seria chamar o objeto Java
     por dentro (`_jdf.queryExecution()`), que da o texto direto e quebra
-    quando a versao do motor muda -- e o runtime do Databricks e mais novo que
+    quando a versao do motor muda, e o runtime do Databricks e mais novo que
     o pyspark do venv (decisao 8.9).
     """
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         spark.sql(sql).explain(mode=modo)
     return buffer.getvalue()
+
+
+# No modo `formatted`, o texto tem duas partes: a arvore e, depois, um bloco
+# de detalhe por operador, aberto por uma linha como `(7) HashAggregate`.
+# Contar o texto inteiro conta cada operador duas vezes.
+INICIO_DO_DETALHE = re.compile(r"^\(\d+\) ", re.MULTILINE)
+
+
+def somente_a_arvore(texto: str) -> str:
+    """Corta o texto do plano antes da secao de detalhe.
+
+    Em `simple`, que nao tem secao de detalhe, devolve o texto inteiro. E o
+    que deixa `resumo_do_plano` responder o mesmo nos dois modos.
+    """
+    achado = INICIO_DO_DETALHE.search(texto)
+    return texto[: achado.start()] if achado else texto
 
 
 def resumo_do_plano(texto: str) -> dict:
@@ -286,14 +324,26 @@ def resumo_do_plano(texto: str) -> dict:
     `Exchange` em 4 responde "ha quatro shuffles" sem que ninguem precise
     procurar a palavra no meio de duzentas linhas.
 
+    **Conta so a arvore.** A primeira versao contava o texto inteiro e devolvia
+    o dobro no modo `formatted`, que imprime a arvore e depois um bloco de
+    detalhe por operador. O erro apareceu ao conferir `Scan` contra o numero
+    de tabelas de cada consulta: tres tabelas devolviam seis varreduras, nas
+    tres consultas medidas.
+
+    Um fator constante se cancelava em `diferenca_de_plano`, que era o uso
+    pretendido, entao o defeito so atingia a leitura absoluta,
+    que foi exatamente como o resultado acabou sendo apresentado.
+
     Conta ocorrencia de texto, e nao no de arvore. Serve para comparar dois
-    planos da mesma consulta antes e depois de uma mudanca, que e o uso
-    pretendido; nao serve como analise estrutural.
+    planos da mesma consulta antes e depois de uma mudanca; nao serve como
+    analise estrutural.
     """
+    arvore = somente_a_arvore(texto)
+
     return {
-        operador: texto.count(operador)
+        operador: arvore.count(operador)
         for operador in OPERADORES
-        if texto.count(operador) > 0
+        if arvore.count(operador) > 0
     }
 
 

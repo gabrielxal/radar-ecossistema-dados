@@ -64,7 +64,7 @@ if _token:
     w.secrets.put_secret(scope=ESCOPO, key=CHAVE, string_value=_token)
     print("segredo gravado. o valor segue visivel no widget ate ser apagado.")
 else:
-    print("campo vazio -- nada gravado.")
+    print("campo vazio: nada gravado.")
 
 del _token
 
@@ -104,4 +104,4 @@ resposta = cliente.get("/rate_limit")
 
 limite = resposta.dados["resources"]["core"]["limit"]
 print("limite de requisicoes por hora:", limite)
-print("AUTENTICADO" if limite > 1000 else "NAO AUTENTICADO -- verifique o token")
+print("AUTENTICADO" if limite > 1000 else "NAO AUTENTICADO: verifique o token")

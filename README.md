@@ -153,7 +153,7 @@ A pergunta que separou os dois casos não é sobre o recurso, é sobre a origem 
 > uma violação aqui é sujeira que chegou, ou defeito do meu próprio código?
 
 A bronze e a silver ingerem dado externo, então a resposta é sujeira, e o instrumento certo é a
-quarentena — isola a linha, registra o motivo, deixa a carga passar. A gold não ingere nada:
+quarentena, que isola a linha, registra o motivo e deixa a carga passar. A gold não ingere nada:
 ela é derivada pelo meu código. Ali a resposta é defeito meu, e carga que grava defeito de
 derivação deve mesmo abortar.
 
@@ -311,7 +311,7 @@ quarto do ritmo de um dia útil, contra os 28,6% que uma distribuição uniforme
 
 ## Dificuldades encontradas
 
-O diário de bordo completo tem 29 entradas, em [`docs/PROJETO.md`](docs/PROJETO.md). Estas são as
+O diário de bordo completo tem 32 entradas, em [`docs/PROJETO.md`](docs/PROJETO.md). Estas são as
 que mais custaram.
 
 ### O pipeline apagou histórico e disse que estava tudo bem
@@ -436,8 +436,8 @@ reconstrução.
 
 ### A camada de consumo
 
-O pipeline terminava na gold sem ninguém consumindo. O que faltava não era mais uma consulta —
-elas já existiam — e sim um lugar estável de onde um painel pudesse lê-las.
+O pipeline terminava na gold sem ninguém consumindo. O que faltava não era mais uma consulta,
+porque elas já existiam, e sim um lugar estável de onde um painel pudesse lê-las.
 
 A decisão está em onde o SQL do painel mora. Colado dentro de cada widget, ele seria uma segunda
 cópia da lógica, sem teste e livre para divergir. Materializado como tabela, congelaria a janela
@@ -449,7 +449,7 @@ separada do notebook, o que deixava a leitura correta na mão de quem lembrasse 
 consultas. Num painel isso não sobrevive: as colunas de issue aparecem ao lado das de commit,
 com a mesma cara de fato consolidado, e nada na tela diz que as de um repositório ainda truncado
 estão deslocadas. Agora `issues_confiavel` é coluna do painel, e o padrão de quem não sabe é
-`false` — nulo se lê como "sem problema".
+`false`, porque nulo se lê como "sem problema".
 
 O layout está em [`dashboards/painel_de_saude.md`](dashboards/painel_de_saude.md), versionado
 pelo mesmo motivo que as definições de job.
@@ -476,13 +476,13 @@ src/radar/            lógica testável, sem dependência de notebook
 notebooks/          orquestração fina, um passo por notebook
 orquestracao/       definições dos jobs do Databricks, versionadas
 dashboards/         o layout do painel, versionado
-tests/              620 casos
+tests/              625 casos
 docs/PROJETO.md     as decisões e por que as alternativas foram rejeitadas
 ```
 
 ### Testes
 
-São 620 casos, divididos por custo: 434 rodam sem subir JVM, em menos de um segundo, e 186 sobem
+São 625 casos, divididos por custo: 438 rodam sem subir JVM, em menos de um segundo, e 187 sobem
 uma sessão Spark local.
 
 A separação tem uma consequência que só apareceu no fim. O job de CI que roda a suíte rápida
@@ -496,16 +496,115 @@ Catalog: `MERGE`, `saveAsTable` e `DESCRIBE HISTORY` seguem validados apenas no 
 
 ### Orquestração
 
-Dois jobs, com cadências decididas por uma pergunta só: o dado perdido volta?
+Dois jobs do Databricks, definidos em `orquestracao/*.yml` e versionados junto do código.
 
-| Job | Cadência | O que faz |
+#### Por que dois, e não um
+
+A cadência de cada carga foi decidida por uma pergunta só: **o dado perdido volta?**
+
+| Fonte | Histórico que a API guarda | Execução perdida |
 |---|---|---|
-| `snapshot-diario-radar` | diária | coleta a foto de stars, forks e issues abertas |
-| `pipeline-completo-radar` | semanal | ingestão até o painel, onze tarefas em DAG |
+| `/repos/{repo}/commits` | 90 dias, acessíveis por `since` | a seguinte recupera |
+| `/repos/{repo}/issues` | completo, por `updated_at` | a seguinte recupera |
+| `/repos/{repo}` | nenhum, devolve só o estado de agora | o dia está perdido para sempre |
 
-Commits têm 90 dias de histórico consultável, então uma execução perdida se conserta na seguinte.
-Stars e forks não têm passado consultável: o dia não coletado está perdido para sempre, e por
-isso ganharam job próprio.
+Stars, forks e issues abertas não têm passado consultável. O valor de ontem só existe se alguém
+o tiver gravado ontem, e isso torna a coleta do snapshot a única parte do pipeline com custo
+irreversível de atraso. Ela ganhou job próprio, diário.
+
+O resto roda semanalmente. Commit e issue têm histórico recuperável, então uma execução perdida
+se conserta na seguinte, o que já foi comprovado na recuperação descrita nas dificuldades.
+Juntar tudo num job diário gastaria compute reprocessando o que a origem ainda guarda.
+
+| Job | Cadência | Tarefas |
+|---|---|---|
+| `snapshot-diario-radar` | diária, 9h | `07_repositorios` |
+| `pipeline-completo-radar` | domingo, 9h30 | onze, em DAG |
+
+#### O DAG não é uma fila
+
+```mermaid
+flowchart LR
+    ING[ingestao_commits] --> BR[bronze_commits]
+    BR --> QB[qualidade_bronze]
+    BR --> SC[silver_commits]
+    SC --> QS[qualidade_silver]
+    REP[repositorios] --> DIM[dimensoes]
+    ISS[issues] --> DIM
+    SC --> DIM
+    DIM --> FAT[fatos]
+    FAT --> CON[consumo]
+    FAT --> MAN[manutencao]
+```
+
+Três tarefas não dependem de nada e começam juntas: `ingestao_commits`, `repositorios` e
+`issues`. Declarar as dependências reais, em vez de encadear tudo em sequência, encurta a
+execução e deixa explícito o que de fato depende de quê.
+
+Duas junções do grafo carregam decisão de modelagem:
+
+`dimensoes` espera as **três** silvers. Ela lê de todas porque `dim_autor` é conformada entre os
+fatos que apontam para ela, e quem abre issue nem sempre commita. Uma dependência a menos aqui
+produziria uma dimensão tecnicamente íntegra e analiticamente vazia.
+
+`consumo` e `manutencao` esperam `fatos` e não uma à outra, então fecham a execução em paralelo.
+`manutencao` vem depois dos fatos de propósito: aplicada sobre a tabela recém-carregada, a
+restrição valida o que a execução acabou de gravar, e a tarefa vira a última rede da carga em
+vez de configuração estática.
+
+#### Retentativa só onde ela ajuda
+
+`max_retries` existe apenas nas três tarefas que tocam a rede. Falha de API é transitória e a
+segunda tentativa costuma passar. Falha em `dimensoes`, `fatos` ou `manutencao` é defeito de
+lógica ou de dado, e retentar apenas repete o erro cinco minutos depois.
+
+Já existe uma camada de retentativa antes desta: o `github_client.py` faz backoff exponencial
+com até cinco tentativas, respeitando `Retry-After`. Quando a tarefa falha, o cliente já esgotou
+o próprio ciclo, e é por isso que o intervalo entre tentativas no job importa mais que o número
+delas.
+
+A notificação também fica no job, e não em cada tarefa. Uma falha derruba as seguintes por
+dependência, e oito e-mails descrevendo o mesmo incidente treinam qualquer um a ignorar o
+alerta.
+
+#### Como o código chega ao cluster
+
+As tarefas usam `"source": "GIT"`, com o job clonando o repositório a cada execução. A
+alternativa seria apontar para os notebooks do Git folder no workspace, que exige alguém clicar
+em Pull.
+
+A escolha elimina uma classe inteira de defeito registrada no diário de bordo: código no
+workspace divergindo do que está no repositório, com a execução usando a versão antiga sem
+avisar. Em produção não há quem clique.
+
+#### O que a primeira execução completa mediu
+
+Executada em 2026-08-24, com as oito tarefas que existiam então:
+
+| | |
+|---|---|
+| Soma das durações | 11m54s |
+| Caminho crítico real | ~9m40s |
+| Ganho da paralelização | ~2min |
+
+`ingestao_commits` levou 6m40s e `repositorios` 6m49s, rodando ao mesmo tempo. A segunda coube
+inteira dentro da sombra da primeira.
+
+Dois detalhes que a execução comprovou. O primeiro é que a igualdade entre bronze, silver e gold
+atravessou uma execução automática, sem ninguém acompanhando. O segundo é mais sutil: o job
+diário coletou às 9h e o pipeline coletou de novo no mesmo dia, e mesmo assim há apenas duas
+fotos. A chave `(repo, dt)` da bronze colapsou as duas coletas numa linha, que é exatamente o
+que o grão de um repositório por dia exige.
+
+#### O que ainda é manual
+
+Os arquivos em `orquestracao/` descrevem os jobs, mas não os criam. Quem cria é a interface do
+Databricks, e manter as duas coisas em sincronia é trabalho manual enquanto não houver deploy
+automatizado. O arquivo existe para que a configuração tenha histórico, revisão e caminho de
+recuperação como qualquer outro código.
+
+O endereço de notificação fica fora do repositório, com um marcador no lugar. Arquivo público
+com e-mail dentro é varrido por coleta automatizada.
 
 ### Reproduzindo
 
@@ -530,4 +629,4 @@ grava uma tabela de escala sintética para medir o que 18 mil linhas não conseg
 ## Documentação completa
 
 [`docs/PROJETO.md`](docs/PROJETO.md) registra cada decisão com a alternativa que foi rejeitada e o
-porquê, mais o diário de bordo com as 29 entradas de erro e o que cada uma ensinou.
+porquê, mais o diário de bordo com as 32 entradas de erro e o que cada uma ensinou.

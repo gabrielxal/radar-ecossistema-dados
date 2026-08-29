@@ -12,7 +12,7 @@ from radar.controle import (
 
 
 # --------------------------------------------------------------------------
-# calcular_watermark -- a janela de sobreposicao
+# calcular_watermark: a janela de sobreposicao
 # --------------------------------------------------------------------------
 
 def test_watermark_recua_a_janela_de_sobreposicao():
@@ -37,7 +37,7 @@ def test_watermark_nunca_avanca_alem_do_dado():
 
 
 # --------------------------------------------------------------------------
-# para_iso -- formato aceito pelo parametro `since`
+# para_iso: formato aceito pelo parametro `since`
 # --------------------------------------------------------------------------
 
 def test_iso_no_formato_da_api():
@@ -60,7 +60,7 @@ def test_iso_de_none_e_none():
 
 
 # --------------------------------------------------------------------------
-# parametros_de_busca -- o checkpoint virando chamada de API
+# parametros_de_busca: o checkpoint virando chamada de API
 # --------------------------------------------------------------------------
 
 def test_sem_checkpoint_a_carga_e_completa():
@@ -87,7 +87,7 @@ def test_checkpoint_sem_watermark_nao_manda_since():
 
 
 # --------------------------------------------------------------------------
-# Checkpoint -- o contrato
+# Checkpoint: o contrato
 # --------------------------------------------------------------------------
 
 def test_checkpoint_tem_valores_padrao_seguros():
@@ -107,7 +107,7 @@ def test_checkpoint_e_imutavel():
 
 
 # --------------------------------------------------------------------------
-# parametros_de_janela -- limite superior e parametros do endpoint
+# parametros_de_janela: limite superior e parametros do endpoint
 # --------------------------------------------------------------------------
 
 INICIO = datetime(2026, 5, 24, tzinfo=timezone.utc)

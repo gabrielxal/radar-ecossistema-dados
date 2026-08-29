@@ -21,7 +21,7 @@ livre para divergir da primeira. É a decisão 8.12 aplicada à camada de consum
 e está registrada em `docs/PROJETO.md`, seção 8.13.
 
 Se um visual precisar de um recorte que a visão não dá, o caminho é acrescentar
-a coluna em `analises.py` — não escrever SQL no widget.
+a coluna em `analises.py`, e não escrever SQL no widget.
 
 ## Datasets
 
@@ -37,7 +37,7 @@ a coluna em `analises.py` — não escrever SQL no widget.
 
 Uma página, `Saúde do ecossistema`, em grade de 6 colunas.
 
-### 1. Concentração de manutenção — barras horizontais
+### 1. Concentração de manutenção (barras horizontais)
 
 | | |
 |---|---|
@@ -51,7 +51,7 @@ Título: *Quantas pessoas concentram metade dos commits*.
 Descrição: *1 é ponto único de falha. Janela de 90 dias, bots e histórico
 enxertado fora.*
 
-### 2. Acelerando ou desacelerando — dispersão
+### 2. Acelerando ou desacelerando (dispersão)
 
 | | |
 |---|---|
@@ -67,10 +67,10 @@ Descrição: *Quadrante inferior esquerdo é queda nos dois. Volume subindo com
 produção por pessoa caindo é time crescendo, não projeto acelerando.*
 
 As duas linhas de referência em zero são o que torna o gráfico legível: elas
-separam os quatro quadrantes, e é a combinação dos sinais — não cada um
-isolado — que responde a pergunta.
+separam os quatro quadrantes, e é a combinação dos sinais, não cada um
+isolado, que responde a pergunta.
 
-### 3. Vazão contra backlog — dispersão
+### 3. Vazão contra backlog (dispersão)
 
 | | |
 |---|---|
@@ -88,7 +88,7 @@ inferior esquerdo é saudável nas duas medidas.*
 É o visual que justifica ter as duas colunas: `polars` e `hudi` ficam em
 extremos opostos do eixo X e quase juntos no Y.
 
-### 4. Estado da coleta — tabela
+### 4. Estado da coleta (tabela)
 
 | | |
 |---|---|
@@ -104,7 +104,7 @@ crescente, o que chega primeiro é a parte velha e já fechada do backlog.*
 Este widget não é diagnóstico de infraestrutura: é o rodapé metodológico dos
 dois visuais de issue, e por isso fica na mesma página, não numa aba separada.
 
-### 5. O painel — tabela
+### 5. O painel (tabela)
 
 | | |
 |---|---|
@@ -123,8 +123,8 @@ igualaria os dois.*
 factor, ritmo e backlog num número de 0 a 100 esconderia justamente a
 informação que distingue um risco do outro.
 
-**Filtro de período.** As janelas — 90 dias para commits, 45 por período de
-comparação — são parâmetros das funções em `analises.py`, com o motivo escrito
+**Filtro de período.** As janelas, 90 dias para commits e 45 por período de
+comparação, são parâmetros das funções em `analises.py`, com o motivo escrito
 no docstring. Expô-las como controle no painel convidaria a mudar o valor sem
 o raciocínio junto, e a comparação entre duas leituras deixaria de ser válida.
 
@@ -144,5 +144,5 @@ longe da causa.
 O caminho de correção é conhecido e barato: monte o painel uma vez seguindo
 este arquivo, exporte o JSON pela interface, e comite o resultado ao lado
 deste documento. A partir daí a especificação vira a documentação do que o
-JSON contém, e o JSON vira a fonte reaplicável — que é a mesma divisão de
+JSON contém, e o JSON vira a fonte reaplicável, que é a mesma divisão de
 papéis entre `docs/PROJETO.md` e o código.

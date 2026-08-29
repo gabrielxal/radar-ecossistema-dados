@@ -44,7 +44,7 @@ aprendizado, escrito enquanto acontecia, e isso muda o que se espera de cada par
 |---|---|
 | 2 | A pergunta que originou tudo, e como cada pergunta menor forçou uma peça do modelo |
 | 3 a 8 | As decisões de projeto, cada uma com a alternativa descartada e o motivo |
-| 9 | O diário de bordo: 29 erros, com sintoma, causa raiz e a lição de cada um |
+| 9 | O diário de bordo: 32 erros, com sintoma, causa raiz e a lição de cada um |
 | 10 | O caminho percorrido, etapa por etapa, e o que ficou em aberto |
 
 A seção 9 é a que mais vale a leitura. Ela registra o que deu errado, incluindo decisões
@@ -156,8 +156,8 @@ depois. A estrutura por camada acima descreve o resultado e foi adotada como cri
 #### O que ficou de fora
 
 Streaming, OLAP distribuído, BI e ingestão declarativa. São ausências que limitam a conclusão:
-tudo aqui é batch, a camada de apresentação não é medida — o painel deste projeto roda no
-Databricks, que é produto fechado — e a camada EL do stack moderno não aparece. Uma sondagem de 47 candidatos foi feita em 2026-08-25 e está registrada em 10.13.
+tudo aqui é batch, a camada de apresentação não é medida, e a camada EL do stack moderno não
+aparece. O painel deste projeto roda no Databricks, que é produto fechado. Uma sondagem de 47 candidatos foi feita em 2026-08-25 e está registrada em 10.13.
 
 Databricks e S3 não entram por outro motivo: são produtos fechados, sem repositório público, e
 um pipeline que mede saúde de repositório não tem o que medir neles.
@@ -1072,8 +1072,8 @@ a invariante se perderia em silêncio no dia em que alguém movesse a dependênc
 
 | Job | Instala | Cobre | Prova além disso |
 |---|---|---|---|
-| `rápidos` | `.[test]` | 434 casos, sem JVM | os módulos importam sem o motor |
-| `com Spark` | `.[dev]` | 186 casos, com JVM | o comportamento do motor, num Linux limpo |
+| `rápidos` | `.[test]` | 438 casos, sem JVM | os módulos importam sem o motor |
+| `com Spark` | `.[dev]` | 187 casos, com JVM | o comportamento do motor, num Linux limpo |
 
 O job rápido roda em Python 3.10 e 3.12, os extremos do que o `pyproject.toml` declara em
 `requires-python`. Sem isso, o intervalo declarado seria mais uma afirmação não exercida.
@@ -1112,8 +1112,8 @@ vez de repetidas em cada consulta. Uma delas mudar de valor é uma edição, nã
 ### 8.13 A camada de consumo: o SQL não pode morar no dashboard
 
 O pipeline terminava na gold sem consumidor, e a seção 10.9 registrava isso como limitação
-conhecida. O que faltava não era mais uma consulta — as cinco da seção 2.3 já existiam em
-`analises.py` — e sim um lugar estável de onde um painel pudesse lê-las.
+conhecida. O que faltava não era mais uma consulta, porque as cinco da seção 2.3 já existiam em
+`analises.py`, e sim um lugar estável de onde um painel pudesse lê-las.
 
 A decisão está em onde o SQL do painel mora, e ela tem três candidatos:
 
@@ -1133,7 +1133,7 @@ continuaria respondendo isso a semana inteira, sem nada na tela dizendo que a le
 envelheceu.
 
 A visão não tem carga, então não há o que dar errado entre a gold e o painel. O custo é
-recalcular a cada abertura, e o dia em que isso pesar tem sintoma direto — o painel demora.
+recalcular a cada abertura, e o dia em que isso pesar tem sintoma direto: o painel demora.
 A saída, nesse dia, é materializar as visões mais caras como tabela na tarefa de fatos.
 
 #### O portão passou a ser coluna
@@ -1170,7 +1170,7 @@ O layout está em `dashboards/painel_de_saude.md`, versionado pelo mesmo motivo 
 ### 8.14 Restrição do motor onde a violação é nossa, quarentena onde vem da origem
 
 O Delta aceita `CHECK` constraints, e o projeto não usava nenhuma. A pergunta não é por que
-adotar, e sim onde — porque a bateria de qualidade já verifica invariante, e os dois
+adotar, e sim onde, porque a bateria de qualidade já verifica invariante e os dois
 mecanismos falham de formas opostas:
 
 | | `CHECK` | bateria |
@@ -1185,7 +1185,7 @@ Abortar tudo por causa de uma linha é exatamente o comportamento que a seção 
 carga inteira.
 
 Mas ele deixa de ser errado quando a violação não pode vir da origem. A gold não ingere
-nada — é derivada pelo nosso próprio código a partir da silver. Uma linha inválida ali não é
+nada: é derivada pelo nosso próprio código a partir da silver. Uma linha inválida ali não é
 sujeira que chegou: é defeito de derivação, e carga que grava defeito de derivação deve
 mesmo abortar.
 
@@ -1220,7 +1220,7 @@ Dez restrições em seis tabelas, e três famílias:
 
 A terceira é a que mais vale. `size(NULL)` devolve `-1` em modo legado, e não `NULL`, então
 uma guarda por `coalesce` não dispara e o valor negativo atravessa qualquer verificação de
-nulo. Isso aconteceu duas vezes, e nas duas quem pegou foi um teste — nunca o dado. Uma
+nulo. Isso aconteceu duas vezes, e nas duas quem pegou foi um teste, nunca o dado. Uma
 restrição no motor teria pego na primeira gravação.
 
 A tarefa roda depois de `fatos`, e não como configuração à parte, exatamente por isso:
@@ -1232,8 +1232,8 @@ gravar.
 ### 8.15 Retenção e time travel são a mesma decisão
 
 O padrão do Delta guarda arquivo apagado por 7 dias, e é esse período que define até onde o
-time travel alcança. As duas coisas costumam ser tratadas como assuntos separados — limpeza
-de um lado, recurso de consulta do outro — e são o mesmo número visto de dois lados.
+time travel alcança. As duas coisas costumam ser tratadas como assuntos separados, limpeza
+de um lado e recurso de consulta do outro, e são o mesmo número visto de dois lados.
 
 Sete dias não servem aqui, e o motivo vem da decisão 8.10: o pipeline é semanal. Uma carga
 defeituosa no domingo só seria notada na leitura seguinte, e a janela para voltar atrás já
@@ -1256,7 +1256,7 @@ nenhuma delas tem valor de auditoria.
 
 O `VACUUM` apaga exatamente o que o time travel usaria, e não tem desfazer. Numa tarefa
 agendada ele rodaria sem ninguém olhando, na mesma execução em que uma carga defeituosa
-acabou de gravar — e destruiria a versão boa junto.
+acabou de gravar, e destruiria a versão boa junto.
 
 O volume também não justifica: são poucos MB, e arquivo obsoleto não chega perto de custar
 o que custa perder a possibilidade de voltar. O comando fica montado em
@@ -1336,13 +1336,109 @@ distribuísse por igual mediria um dado que este ecossistema não tem.
 
 Tempo de parede num cluster gerenciado varia com vizinho, cache de disco e estado do motor.
 Duas execuções seguidas da mesma consulta não dão o mesmo número, e a primeira quase sempre é
-a mais lenta — por isso `medir` repete e devolve a mediana, com a fria acessível ao lado.
+a mais lenta. Por isso `medir` repete e devolve a mediana, com a fria acessível ao lado.
 
 O que se registra deste experimento não é o tempo absoluto, que não se compara entre sessões,
 e sim: o tamanho médio de arquivo, a concentração por `repo` (que é propriedade do
-ecossistema, não do cluster), a **razão** entre volume e tempo, e o que mudou no plano.
+ecossistema, não do cluster), a razão entre volume e tempo, e o que mudou no plano.
 
 Se uma medida contradisser um comentário do código, o comentário é que está errado.
+
+#### O que a primeira execução mediu
+
+Executado em 2026-08-29, com `fator=10`. As quatro alavancas, todas com o mesmo veredito.
+
+**Armazenamento.** Não há fragmentação: de 1 a 8 arquivos por tabela.
+
+| Tabela | Arquivos | MB | MB/arquivo |
+|---|---|---|---|
+| `bronze.commits` | 5 | 15,7 | 3,15 |
+| `bronze.issues` | 8 | 144,1 | 18,01 |
+| `silver.commits` | 4 | 4,9 | 1,22 |
+| `gold.fct_commit` | 1 | 0,5 | 0,48 |
+| `gold.fct_issue` | 1 | 1,6 | 1,63 |
+
+O tamanho médio é pequeno porque a tabela inteira é menor que um arquivo ideal, não porque
+foi quebrada em pedaços. A hipótese que estava escrita no notebook, de que a carga
+incremental semanal produziria fragmentação e a resposta seria compactar, **foi refutada**.
+
+O que a medida confirma é o comentário de `bronze.ddl`: 15,7 MB em 14 repositórios dariam
+~1,1 MB por partição, contra os 3,15 atuais. Particionar triplicaria a contagem de arquivos.
+A afirmação estava certa e agora tem número.
+
+E aparece uma assimetria que ninguém tinha notado: `bronze.issues` tem 9 vezes o tamanho de
+`bronze.commits`. Duas causas somadas: o payload de issue é muito maior, e aquela bronze é
+log de versões, com `dt` na chave. É o primeiro lugar onde o crescimento vai doer.
+
+**Desbalanceamento.** A previsão da seção se confirmou com precisão:
+
+| Chave | Maior valor | % do total | × a média |
+|---|---|---|---|
+| `repo` | `duckdb/duckdb` | 31,3% | **4,4×** |
+| `sha` | qualquer | 0,0% | **1,0×** |
+
+Do maior repositório ao menor são 51× de diferença. Os dois shuffles do pipeline deixaram de
+ser observação e viraram medida.
+
+**Volume.** Dez vezes as linhas, no mesmo tempo:
+
+```
+agrupar por repo (18.673 linhas)     1,30s
+agrupar por repo (186.730 linhas)    1,26s     volume ×10, tempo ×1,0
+```
+
+1,3s é o custo fixo de planejar e agendar. O processamento é ruído dentro disso nos dois
+tamanhos. A resposta à pergunta "o volume custa?" é **não, ainda não**. O projeto está uma ou
+duas ordens de grandeza abaixo de onde qualquer alavanca pega.
+
+**`OPTIMIZE` e `CLUSTER BY`.** Nenhum dos dois teve espaço: a tabela de escala tinha um
+arquivo só, antes e depois. Sem fragmentação não há o que compactar, e com um arquivo o data
+skipping não tem o que pular.
+
+**Planos.** Contagem de operadores, já corrigida do defeito da entrada 32:
+
+| Consulta | Exchange | BroadcastHashJoin | Scan |
+|---|---|---|---|
+| `bus_factor` | 10 | 2 | 3 |
+| `ritmo_por_autor` | 14 | 3 | 4 |
+| `ciclo_de_issues` | 6 | 1 | 2 |
+| **painel** | 32 | 9 | 10 |
+
+O painel custa 30 dos 32 shuffles apenas somando as três partes: **o motor não reaproveita
+nada**, porque as CTEs leem combinações diferentes de tabelas com filtros diferentes. São 32
+shuffles e 10 varreduras para devolver 14 linhas.
+
+Hoje isso não custa nada, pelo motivo da linha do volume. Mas é o número que torna concreta a
+saída prevista em 8.13: quando o painel demorar, materializar as visões menores é uma opção
+com custo conhecido.
+
+#### O veredito, e por que um resultado negativo vale
+
+Nenhuma das alavancas tinha o que pegar. Não há arquivo pequeno, o skew é real e não custa,
+o volume não move o relógio, e as duas operações de layout não tinham espaço.
+
+Isso é o resultado, não a falha do experimento. A maior parte das boas práticas de desempenho
+aplicada a dado pequeno é ritual, e o que distingue quem sabe é conseguir mostrar em qual
+regime está. O que fica de durável é o mapa dos três lugares onde a dor vai aparecer
+primeiro: o skew de 4,4× por `repo`, os 32 shuffles do painel, e o crescimento de
+`bronze.issues` como log de versões.
+
+#### O limite que a própria medição revelou
+
+`replicar` escala linhas, não bytes:
+
+| | Linhas | MB | Bytes/linha |
+|---|---|---|---|
+| `silver.commits` | 18.673 | 4,9 | 275 |
+| `escala_commits` | 186.730 | 6,1 | **34** |
+
+Dez vezes as linhas em 1,24× os bytes. A réplica produz dez cópias quase idênticas de cada
+linha, e a codificação por dicionário do Parquet esmaga isso; um conjunto real de 186 mil
+commits pesaria ~49 MB. Qualquer medida limitada por I/O sai subestimada por um fator de ~8.
+
+A distribuição, essa sobreviveu: `duckdb/duckdb` continua em 31,3% e 4,4× depois de
+replicar, que era a parte projetada com cuidado.
+
 
 ---
 
@@ -1453,6 +1549,34 @@ O que mudou o custo foi onde cada verificação morava. As que estavam em `src/`
 falharam na máquina local, em segundos. As que estavam em `assert` de notebook falharam no
 Databricks, depois de esperar cluster. É o argumento da decisão 8.1 outra vez, e foi o que
 motivou 8.12.
+
+### 9.9 Encontrados ao usar o que a Etapa 9 construiu
+
+Nenhum dos três veio de escrever código. Os três apareceram ao ler o resultado da primeira
+execução, e dois deles são defeitos dos próprios instrumentos de medida.
+
+Isso repete a forma da entrada 19, com o alvo deslocado: lá a ferramenta de diagnóstico
+respondeu sobre o arquivo em disco quando a pergunta era sobre a memória. Aqui os instrumentos
+responderam número plausível sobre a coisa errada.
+
+| # | Sintoma | Causa raiz | Lição |
+|---|---|---|---|
+| 30 | O painel devolvendo `ritmo_por_autor_pct` diferente do registrado quatro dias antes, sem nenhuma carga nova ter acontecido | As consultas de análise usam `current_date()`, então a janela de 45 dias anda com o relógio; o dado para na última carga semanal. Cinco dias depois da carga, a janela "recente" tem 41 dias de dado e 4 de zero estrutural, o que empurra todos os `_45d` para baixo | Visão que reavalia `current_date()` resolve o problema oposto ao da tabela materializada e cria um próprio: o painel envelhece entre cargas em vez de congelar. As duas falhas são silenciosas, e a escolha entre elas é sobre qual se prefere. A saída é ancorar a janela na data máxima do fato, não no relógio. Mas a decisão vinha antes: nenhuma das duas alternativas era neutra, e isso não estava escrito em 8.13 |
+| 31 | Três formas de armazenamento da mesma tabela medindo 0,92s, 0,89s e 0,83s, sugerindo 10% de ganho com `CLUSTER BY` | A sessão esquentava entre as medições. A distância entre a execução fria e a mediana caiu 0,12, 0,06 e 0,00 na mesma ordem, e a tabela agrupada tinha um arquivo só, sem nada para o data skipping pular | Comparar casos em sequência garante que o cluster é o mesmo, e é por isso que `comparar` existe. Mas garante também que o último caso mede uma sessão mais quente que o primeiro, e o efeito tem o tamanho do ganho que se procura. Quem denunciou foi a propriedade `primeira`, escrita porque "às vezes a diferença entre a fria e a mediana é o achado", e o achado foi contra a própria medição. A correção é uma execução descartada antes de cronometrar |
+| 32 | `Scan: 6` numa consulta que lê três tabelas, nas três consultas medidas | `explain(mode="formatted")` imprime a árvore e depois um bloco de detalhe por operador, e `resumo_do_plano` contava ocorrência no texto inteiro | O fator constante se cancelava em `diferenca_de_plano`, que era o uso pretendido e testado, então o defeito ficou invisível até o resultado ser apresentado como leitura absoluta. Função escrita para comparar e usada para descrever erra sem avisar. O teste que faltava é o mais simples que existe: consulta com duas tabelas tem de mostrar duas varreduras |
+
+A lição de conjunto é sobre a ordem em que as coisas foram feitas. Os três defeitos existiam
+desde que o código foi escrito e nenhum teste os pegava, porque todos os testes exercitavam o
+instrumento contra dado sintético com resposta conhecida, e o instrumento respondia certo
+ali. O que os revelou foi confrontar a saída com uma expectativa externa: quantas tabelas a
+consulta lê, o que aconteceu com o dado desde a última carga, o que a ordem das medições
+poderia estar fazendo.
+
+> Instrumento de medida precisa de uma verificação que não venha dele mesmo.
+
+É o argumento da reconciliação da seção 5.7 aplicado a ferramenta em vez de dado: verificar o
+que chegou não substitui perguntar o que deveria ter chegado.
+
 
 ---
 
@@ -1939,8 +2063,8 @@ custo tinha número atrás.
 As decisões estão em 8.13 a 8.16. Três coisas valem registro à parte.
 
 **A fronteira do `CHECK` foi o produto, não o recurso.** Adotar restrição do motor é trivial;
-saber que ela pertence à gold e não à silver é o que a torna correta. O critério — a violação
-é defeito nosso ou sujeira da origem? — está codificado como teste, e `dias_ate_o_commit >= 0`
+saber que ela pertence à gold e não à silver é o que a torna correta. O critério, que pergunta se a violação
+é defeito nosso ou sujeira da origem, está codificado como teste, e `dias_ate_o_commit >= 0`
 tem uma guarda que impede a rejeição de ser desfeita sem passar por ela.
 
 **A regra 10.12 era afirmação e virou verificação.** Prosa em `.py` deve ser ASCII, e nada
@@ -1948,9 +2072,9 @@ exercia isso. A regra foi violada na primeira vez que um módulo novo foi escrit
 e detectada à mão. O teste que faltava agora existe, e é o mesmo argumento da decisão 8.11 num
 caso menor: enquanto a verificação não existe, a afirmação não se sustenta sozinha.
 
-**O que a Etapa 9 não fez.** Nenhum número de desempenho entrou neste documento ainda. O
-notebook `14` existe para produzi-los, e escrevê-los antes de medir seria exatamente o que a
-seção 8.16 critica. Eles entram depois da primeira execução, com a data ao lado.
+**O experimento, e o que ele custou.** O experimento de custo foi executado em 2026-08-29 e os números estão em
+8.16. Ele deu negativo em todas as alavancas, e revelou três defeitos registrados nas entradas
+30 a 32 do diário, dois deles nos próprios instrumentos de medida.
 
 ### 10.11 Convenção de mensagens de commit
 

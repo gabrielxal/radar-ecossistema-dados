@@ -56,7 +56,7 @@ def test_so_configuracao_de_sessao_permitida(arquivo):
 
 @pytest.mark.parametrize("arquivo", FONTES, ids=lambda p: p.name)
 def test_cast_de_data_tolera_valor_invalido(arquivo):
-    # Com ANSI ligado -- padrao em runtime recente -- `to_timestamp` lanca
+    # Com ANSI ligado, que e o padrao em runtime recente, `to_timestamp` lanca
     # excecao e um registro torto derruba a carga inteira.
     conteudo = texto(arquivo)
     for linha in conteudo.splitlines():

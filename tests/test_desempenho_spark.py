@@ -154,3 +154,23 @@ def test_o_plano_de_um_agrupamento_tem_shuffle(spark, commits):
 
     assert resumo.get("Exchange", 0) >= 1
     assert resumo.get("HashAggregate", 0) >= 1
+
+
+def test_o_numero_de_varreduras_bate_com_o_de_tabelas(spark, commits):
+    """O teste que teria pego a contagem em dobro.
+
+    E a conferencia mais simples possivel do resumo: uma consulta que le duas
+    tabelas tem de mostrar duas varreduras. A primeira versao mostrava quatro,
+    porque contava a arvore e a secao de detalhe do modo `formatted`, e o
+    defeito so apareceu ao conferir `Scan` contra o numero de tabelas das
+    consultas reais.
+    """
+    commits.createOrReplaceTempView("_a")
+    commits.createOrReplaceTempView("_b")
+
+    texto = desempenho.plano(
+        spark,
+        "SELECT a.repo, count(*) AS n FROM _a a JOIN _b b USING (sha) GROUP BY a.repo",
+    )
+
+    assert desempenho.resumo_do_plano(texto)["Scan"] == 2

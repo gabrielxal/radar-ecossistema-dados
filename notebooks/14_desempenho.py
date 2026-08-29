@@ -89,14 +89,35 @@ for tabela in ALVOS:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC O que este quadro decide: se o tamanho medio ja esta muito abaixo da
-# MAGIC faixa util, o comentario de `bronze.ddl` esta certo pelo motivo errado.
-# MAGIC Ele diz que **particionar** geraria arquivos pequenos demais, o que
-# MAGIC supoe que sem particao eles sao grandes. Se ja sao pequenos, a carga
-# MAGIC incremental semanal e que os produz, um por execucao, e a resposta nao
-# MAGIC e evitar particao: e compactar.
+# MAGIC **Medido em 2026-08-29, e o resultado refutou a hipotese que estava
+# MAGIC escrita aqui.** O texto anterior dizia que, se o tamanho medio
+# MAGIC estivesse abaixo da faixa util, a carga incremental semanal seria a
+# MAGIC causa e a resposta seria compactar.
 # MAGIC
-# MAGIC O passo 5 mede se compactar paga.
+# MAGIC | tabela | arquivos | MB | MB/arquivo |
+# MAGIC |---|---|---|---|
+# MAGIC | `bronze.commits` | 5 | 15,7 | 3,15 |
+# MAGIC | `bronze.issues` | 8 | 144,1 | 18,01 |
+# MAGIC | `silver.commits` | 4 | 4,9 | 1,22 |
+# MAGIC | `gold.fct_commit` | 1 | 0,5 | 0,48 |
+# MAGIC
+# MAGIC Nao ha fragmentacao: sao de 1 a 8 arquivos por tabela. O tamanho medio
+# MAGIC e pequeno porque **a tabela inteira e menor que um arquivo ideal**, e
+# MAGIC nao porque foi quebrada em pedacos. Compactar nao tem o que juntar.
+# MAGIC
+# MAGIC Licao sobre o proprio instrumento: `mb_por_arquivo` sozinho engana.
+# MAGIC `fct_commit` mostra 0,48 e parece problema classico de arquivo pequeno;
+# MAGIC e um arquivo com a tabela toda dentro. A metrica so significa alguma
+# MAGIC coisa lida junto com a contagem.
+# MAGIC
+# MAGIC O que a medida confirma e o comentario de `bronze.ddl`: 15,7 MB em 14
+# MAGIC repositorios dariam ~1,1 MB por particao, contra os 3,15 atuais.
+# MAGIC Particionar de fato triplicaria a contagem. A afirmacao estava certa e
+# MAGIC agora tem numero.
+# MAGIC
+# MAGIC E aparece uma assimetria que ninguem tinha notado: `bronze.issues` tem
+# MAGIC 9x o tamanho de `bronze.commits`. Payload maior, e log de versoes com
+# MAGIC `dt` na chave. E ali que o crescimento vai doer primeiro.
 
 # COMMAND ----------
 
@@ -293,7 +314,7 @@ print(depois_leitura)
 
 # Tabela separada, e nao `ALTER` na existente, por dois motivos. Nem todo
 # runtime aceita ligar clustering numa tabela criada sem ele, e manter as duas
-# permite medir a mesma consulta nas duas formas na mesma sessao -- que e a
+# permite medir a mesma consulta nas duas formas na mesma sessao, que e a
 # unica comparacao valida de tempo de parede.
 spark.sql(f"""
     CREATE OR REPLACE TABLE {TABELA_AGRUPADA}

@@ -8,7 +8,7 @@ A leitura de arquivo (`ler_landing`) e coberta na secao final, que depende de
 `winutils.exe` no Windows e e pulada quando ele nao esta configurado.
 
 **Fora do alcance destes testes:** `criar_tabela` (USING DELTA), `carregar`
-(MERGE INTO), o Volume e o Unity Catalog -- validados apenas no Databricks.
+(MERGE INTO), o Volume e o Unity Catalog, validados apenas no Databricks.
 """
 
 import json
@@ -73,7 +73,7 @@ def test_underscore_do_nome_do_repositorio_sobrevive(bruto):
 
 def test_motor_e_python_decodificam_igual(bruto):
     # `regexp_replace` usa `$1`; `re.sub` usa `\1`. Sao motores distintos
-    # compartilhando o mesmo padrao -- ou concordam, ou ha bug latente.
+    # compartilhando o mesmo padrao: ou concordam, ou ha bug latente.
     linhas = [
         (commit(f"sha{i}"), ingestao.sanitizar_repo(repo), "2026-08-22", f"{i}.jsonl")
         for i, repo in enumerate(REPOS)

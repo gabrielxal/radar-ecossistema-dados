@@ -429,7 +429,7 @@ def test_endpoint_sem_params_extra_nao_altera_a_sentinela():
 
 
 # --------------------------------------------------------------------------
-# Backfill em janelas -- a correcao do defeito da secao 5.7
+# Backfill em janelas: a correcao do defeito da secao 5.7
 # --------------------------------------------------------------------------
 
 def test_noventa_dias_viram_treze_janelas():

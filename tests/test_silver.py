@@ -143,7 +143,7 @@ def test_ddl_declara_todas_as_colunas_projetadas():
 
 def test_chave_e_data_do_commit_sao_obrigatorias_na_silver():
     # Sao as duas colunas sem as quais a linha nao tem identidade nem lugar
-    # no tempo -- e por isso a quarentena existe.
+    # no tempo, e por isso a quarentena existe.
     ddl = silver.ddl_commits()
     assert "sha                   STRING    NOT NULL" in ddl
     assert "commitado_em          TIMESTAMP NOT NULL" in ddl

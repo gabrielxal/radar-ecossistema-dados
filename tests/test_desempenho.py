@@ -153,8 +153,8 @@ def test_a_marca_da_replica_nao_cabe_numa_chave_natural():
 class SessaoFalsa:
     """Duble que conta execucoes sem executar nada.
 
-    O que se verifica com ele e a mecanica da medicao -- quantas vezes roda,
-    o que roda, o que devolve -- e nao o tempo, que num duble seria zero.
+    O que se verifica com ele e a mecanica da medicao, ou seja quantas vezes
+    roda, o que roda e o que devolve. Nao o tempo, que num duble seria zero.
     """
 
     def __init__(self):
@@ -185,8 +185,11 @@ class _Escrita:
 
 
 def test_medir_repete_o_numero_pedido():
+    """Sem aquecimento, para o teste falar so de repeticao."""
     sessao = SessaoFalsa()
-    medicao = desempenho.medir(sessao, "caso", "SELECT 1", repeticoes=3)
+    medicao = desempenho.medir(
+        sessao, "caso", "SELECT 1", repeticoes=3, aquecer=False
+    )
 
     assert len(medicao.amostras) == 3
     assert sessao.consultas.count("save") == 3
@@ -237,4 +240,70 @@ def test_comparar_mede_todos_os_casos():
     )
 
     assert [m.nome for m in medicoes] == ["a", "b"]
+    # dois casos, cada um com uma execucao de aquecimento mais duas medidas
+    assert sessao.consultas.count("save") == 6
+
+
+# --------------------------------------------------------------------------
+# Os dois defeitos que o uso do instrumento revelou
+# --------------------------------------------------------------------------
+
+PLANO_FORMATADO = """== Physical Plan ==
+AdaptiveSparkPlan (7)
++- HashAggregate (6)
+   +- Exchange (5)
+      +- Scan parquet (1)
+
+(1) Scan parquet radar_gold.fct_commit
+Output [3]: [sha, repo, autor]
+
+(5) Exchange
+Input [3]: [sha, repo, autor]
+
+(6) HashAggregate
+Keys: repo
+"""
+
+
+def test_o_resumo_ignora_a_secao_de_detalhe():
+    """O modo `formatted` imprime a arvore e depois um bloco por operador.
+
+    Contar o texto inteiro devolvia o dobro, e o defeito so apareceu ao
+    conferir `Scan` contra o numero de tabelas de cada consulta: tres tabelas
+    davam seis varreduras.
+    """
+    resumo = desempenho.resumo_do_plano(PLANO_FORMATADO)
+
+    assert resumo["Exchange"] == 1
+    assert resumo["Scan"] == 1
+    assert resumo["HashAggregate"] == 1
+
+
+def test_o_corte_e_inofensivo_num_plano_sem_detalhe():
+    """O modo `simple` nao tem secao de detalhe, e o resumo deve ser o mesmo."""
+    simples = "== Physical Plan ==\nHashAggregate\n+- Exchange\n   +- Scan parquet\n"
+
+    assert desempenho.somente_a_arvore(simples) == simples
+    assert desempenho.resumo_do_plano(simples)["Exchange"] == 1
+
+
+def test_medir_aquece_antes_de_cronometrar():
+    """Sem aquecimento, `comparar` mede a ordem dos casos, nao os casos.
+
+    Na primeira execucao do experimento, tres formas de armazenamento da mesma
+    tabela deram 0,92s, 0,89s e 0,83s, e a distancia entre a fria e a
+    mediana caiu 0,12, 0,06 e 0,00 na mesma ordem, que e a sessao esquentando.
+    """
+    sessao = SessaoFalsa()
+    desempenho.medir(sessao, "caso", "SELECT 1", repeticoes=3)
+
+    # 3 cronometradas + 1 descartada
     assert sessao.consultas.count("save") == 4
+
+
+def test_o_aquecimento_pode_ser_desligado():
+    """Para o caso em que a execucao fria e justamente o que se quer medir."""
+    sessao = SessaoFalsa()
+    desempenho.medir(sessao, "caso", "SELECT 1", repeticoes=2, aquecer=False)
+
+    assert sessao.consultas.count("save") == 2

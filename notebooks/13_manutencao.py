@@ -142,7 +142,7 @@ display(spark.sql(manutencao.sql_contagem_por_versao(ALVO, versoes)))
 # MAGIC
 # MAGIC O `VACUUM` apaga exatamente o que o time travel usaria, e nao tem
 # MAGIC desfazer. Numa tarefa agendada ele rodaria sem ninguem olhando, na
-# MAGIC mesma execucao em que uma carga defeituosa acabou de gravar -- e
+# MAGIC mesma execucao em que uma carga defeituosa acabou de gravar, e
 # MAGIC destruiria a versao boa junto.
 # MAGIC
 # MAGIC O volume atual tambem nao justifica: sao poucos MB, e arquivo obsoleto

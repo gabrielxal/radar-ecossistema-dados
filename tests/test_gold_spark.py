@@ -255,7 +255,7 @@ def test_membro_desconhecido_nao_colide_com_autor_real(spark, commits):
 
 
 # --------------------------------------------------------------------------
-# dim_repositorio -- SCD2 derivada das fotos diarias
+# dim_repositorio: SCD2 derivada das fotos diarias
 # --------------------------------------------------------------------------
 
 ESQUEMA_FOTOS = (

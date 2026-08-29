@@ -2,7 +2,7 @@
 
 A sessao Spark local existe para responder o que so o motor sabe: se o DDL
 declarado e aceito, como o `from_json` se comporta na borda e o que a
-descoberta de particoes produz. Ela nao substitui o Databricks -- Delta,
+descoberta de particoes produz. Ela nao substitui o Databricks: Delta,
 Volume e Unity Catalog nao existem aqui.
 """
 
