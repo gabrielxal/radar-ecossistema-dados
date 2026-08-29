@@ -23,20 +23,36 @@
 
 ## 1. Contexto e objetivo
 
-Pipeline de dados fim-a-fim que ingere dados da API REST do GitHub, organiza-os em um
-lakehouse com arquitetura medalhão sobre Delta Lake no Databricks, e entrega um
-modelo dimensional capaz de responder perguntas sobre a saúde de projetos open source
-do ecossistema de engenharia de dados.
+Este é um projeto de estudo. O que ele constrói é um pipeline de dados fim-a-fim que ingere da
+API REST do GitHub, organiza em um lakehouse com arquitetura medalhão sobre Delta Lake no
+Databricks, e entrega um modelo dimensional capaz de responder perguntas sobre a saúde de
+projetos open source do ecossistema de engenharia de dados.
 
-O objetivo é duplo, e ambos importam:
+Mas o produto do estudo não é o pipeline. É o raciocínio que levou a ele.
 
 | Objetivo | Como se manifesta no repositório |
 |---|---|
-| Aprender engenharia de dados moderna | Cada decisão documentada com a alternativa rejeitada |
+| Aprender engenharia de dados moderna | Cada decisão registrada com a alternativa que foi rejeitada |
 | Comprovar competência para o mercado | Testes automatizados, CI, histórico de commits, documentação |
 
-Um repositório de portfólio não é avaliado pelo código que roda, e sim pelo
-raciocínio visível. É isso que este documento registra.
+### Como ler este documento
+
+Ele não é manual de operação nem descrição de sistema em produção. É o registro de um
+aprendizado, escrito enquanto acontecia, e isso muda o que se espera de cada parte.
+
+| Seção | O que você encontra |
+|---|---|
+| 2 | A pergunta que originou tudo, e como cada pergunta menor forçou uma peça do modelo |
+| 3 a 8 | As decisões de projeto, cada uma com a alternativa descartada e o motivo |
+| 9 | O diário de bordo: 29 erros, com sintoma, causa raiz e a lição de cada um |
+| 10 | O caminho percorrido, etapa por etapa, e o que ficou em aberto |
+
+A seção 9 é a que mais vale a leitura. Ela registra o que deu errado, incluindo decisões
+tomadas com informação incompleta e conclusões que precisaram ser revistas depois de medir.
+
+Onde o texto afirma alguma coisa sobre o dado, ele traz o número que sustenta a afirmação e o
+limite de até onde ela vale. Onde uma hipótese foi escrita antes de ser medida e se mostrou
+errada, isso está registrado em vez de reescrito.
 
 ---
 
@@ -140,8 +156,8 @@ depois. A estrutura por camada acima descreve o resultado e foi adotada como cri
 #### O que ficou de fora
 
 Streaming, OLAP distribuído, BI e ingestão declarativa. São ausências que limitam a conclusão:
-tudo aqui é batch, o pipeline termina na gold sem consumidor, e a camada EL do stack moderno
-não aparece. Uma sondagem de 47 candidatos foi feita em 2026-08-25 e está registrada em 10.12.
+tudo aqui é batch, a camada de apresentação não é medida — o painel deste projeto roda no
+Databricks, que é produto fechado — e a camada EL do stack moderno não aparece. Uma sondagem de 47 candidatos foi feita em 2026-08-25 e está registrada em 10.13.
 
 Databricks e S3 não entram por outro motivo: são produtos fechados, sem repositório público, e
 um pipeline que mede saúde de repositório não tem o que medir neles.
@@ -1056,8 +1072,8 @@ a invariante se perderia em silêncio no dia em que alguém movesse a dependênc
 
 | Job | Instala | Cobre | Prova além disso |
 |---|---|---|---|
-| `rápidos` | `.[test]` | 294 casos, sem JVM | os módulos importam sem o motor |
-| `com Spark` | `.[dev]` | 145 casos, com JVM | o comportamento do motor, num Linux limpo |
+| `rápidos` | `.[test]` | 434 casos, sem JVM | os módulos importam sem o motor |
+| `com Spark` | `.[dev]` | 186 casos, com JVM | o comportamento do motor, num Linux limpo |
 
 O job rápido roda em Python 3.10 e 3.12, os extremos do que o `pyproject.toml` declara em
 `requires-python`. Sem isso, o intervalo declarado seria mais uma afirmação não exercida.
@@ -1090,6 +1106,243 @@ minutos de espera por cluster; descoberto aqui custa segundos.
 Há um efeito de projeto além do de teste. As três correções da seção 10.6, que separam
 leitura correta de leitura ingênua, ficaram declaradas uma vez como constante do módulo, em
 vez de repetidas em cada consulta. Uma delas mudar de valor é uma edição, não uma varredura.
+
+---
+
+### 8.13 A camada de consumo: o SQL não pode morar no dashboard
+
+O pipeline terminava na gold sem consumidor, e a seção 10.9 registrava isso como limitação
+conhecida. O que faltava não era mais uma consulta — as cinco da seção 2.3 já existiam em
+`analises.py` — e sim um lugar estável de onde um painel pudesse lê-las.
+
+A decisão está em onde o SQL do painel mora, e ela tem três candidatos:
+
+| Onde | Consequência |
+|---|---|
+| Dentro de cada widget | segunda cópia da lógica, sem teste, livre para divergir |
+| Tabela materializada na gold | congelaria a janela no dia da carga, e uma etapa nova no DAG |
+| **Visão sobre a gold** | o widget vira `SELECT *`, a lógica fica num lugar só |
+
+A primeira desfaz a decisão 8.12. Ela existe justamente para a consulta de análise ser
+exercitada contra o motor antes de rodar na plataforma, e SQL colado num widget não é
+exercitado por nada.
+
+A segunda quebra por um motivo menos óbvio: as consultas usam `current_date()`, e a janela
+de 45 dias precisa andar sozinha. Materializada, ela responderia sobre o dia da carga e
+continuaria respondendo isso a semana inteira, sem nada na tela dizendo que a leitura
+envelheceu.
+
+A visão não tem carga, então não há o que dar errado entre a gold e o painel. O custo é
+recalcular a cada abertura, e o dia em que isso pesar tem sintoma direto — o painel demora.
+A saída, nesse dia, é materializar as visões mais caras como tabela na tarefa de fatos.
+
+#### O portão passou a ser coluna
+
+`cobertura_do_backfill` existe desde a Etapa 6 e vivia numa célula separada do notebook 11,
+o que deixa a leitura correta na mão de quem lembrar de rodar as duas consultas.
+
+Num painel isso não sobrevive. As colunas de issue aparecem ao lado das de commit, com a
+mesma aparência de fato consolidado, e nada na tela diz que as de um repositório truncado
+estão deslocadas. É a mesma forma do defeito da seção 5.7, com uma diferença que piora:
+lá era preciso investigar para errar, aqui basta ler.
+
+`vw_painel_de_saude` traz `issues_confiavel` como coluna. E a junção mora em `consumo.py`,
+não dentro de `painel_de_saude`, porque as duas perguntas são de camadas diferentes: uma é
+sobre a saúde do projeto, a outra sobre o estado da nossa coleta. Compor as duas é trabalho
+do consumo, não da análise.
+
+O padrão da coluna é `FALSE` quando não há linha de controle. Nulo num painel se lê como
+"sem problema", e o padrão de quem não sabe precisa ser "não confie".
+
+#### O que o painel não tem
+
+| Ausência | Motivo |
+|---|---|
+| Índice de saúde de 0 a 100 | bus factor 1 com ritmo alto é risco diferente de bus factor 12 com ritmo caindo, e um número só os igualaria |
+| Filtro de período | as janelas são parâmetros com raciocínio escrito no docstring; expô-las convida a mudar o valor sem o raciocínio junto |
+| Alerta | número que muda toda semana em 14 repositórios não sustenta limiar automático |
+
+O layout está em `dashboards/painel_de_saude.md`, versionado pelo mesmo motivo que
+`orquestracao/*.yml`.
+
+---
+
+### 8.14 Restrição do motor onde a violação é nossa, quarentena onde vem da origem
+
+O Delta aceita `CHECK` constraints, e o projeto não usava nenhuma. A pergunta não é por que
+adotar, e sim onde — porque a bateria de qualidade já verifica invariante, e os dois
+mecanismos falham de formas opostas:
+
+| | `CHECK` | bateria |
+|---|---|---|
+| Quando age | na escrita | depois da carga |
+| Ao violar | aborta a transação inteira | quarentena a linha e segue |
+| Granularidade | tudo ou nada | por linha, com motivo |
+| Onde a regra mora | no catálogo | em `src/`, com teste |
+
+Abortar tudo por causa de uma linha é exatamente o comportamento que a seção 10.4 recusa:
+é o argumento de `try_to_timestamp` contra `to_timestamp`, onde um registro torto derruba a
+carga inteira.
+
+Mas ele deixa de ser errado quando a violação não pode vir da origem. A gold não ingere
+nada — é derivada pelo nosso próprio código a partir da silver. Uma linha inválida ali não é
+sujeira que chegou: é defeito de derivação, e carga que grava defeito de derivação deve
+mesmo abortar.
+
+```
+bronze e silver  ->  quarentena, porque a violação vem da origem
+gold             ->  CHECK, porque a violação é nossa
+```
+
+É a mesma divisão que já existia sem nome: as baterias da bronze e da silver falam de
+conteúdo, as da gold falam de integridade do modelo. `tests/test_manutencao.py` verifica
+que toda restrição do catálogo é de uma tabela da gold, para a fronteira não se perder no
+dia em que alguém achar cômodo acrescentar uma regra "só para garantir".
+
+#### O contraexemplo que define a regra
+
+`dias_ate_o_commit >= 0` parece a restrição mais óbvia do modelo, e foi rejeitada. O valor
+sai de duas datas da origem, e relógio de contribuidor adiantado produz negativo legítimo.
+Ali a violação volta a ser sujeira, e a resposta certa continua sendo medir e reportar, não
+derrubar a carga semanal.
+
+Há um teste que falha se ela entrar. Decisão rejeitada sem guarda é decisão que volta.
+
+#### O que as restrições escolhidas pegam
+
+Dez restrições em seis tabelas, e três famílias:
+
+| Família | Exemplo | O que uma violação significaria |
+|---|---|---|
+| Contrato da chave inteligente | `sk_tempo = year*10000 + mes*100 + dia` | todo fato apontando para o dia errado, em silêncio |
+| Invariantes da SCD2 | `flag_atual = (valido_ate IS NULL)` | duas versões vigentes, ou nenhuma |
+| Contagens não negativas | `qtd_rotulos IS NULL OR qtd_rotulos >= 0` | o `size(NULL) = -1` das entradas 10 e 24 |
+
+A terceira é a que mais vale. `size(NULL)` devolve `-1` em modo legado, e não `NULL`, então
+uma guarda por `coalesce` não dispara e o valor negativo atravessa qualquer verificação de
+nulo. Isso aconteceu duas vezes, e nas duas quem pegou foi um teste — nunca o dado. Uma
+restrição no motor teria pego na primeira gravação.
+
+A tarefa roda depois de `fatos`, e não como configuração à parte, exatamente por isso:
+aplicada sobre a tabela recém-carregada, a restrição valida o que a execução acabou de
+gravar.
+
+---
+
+### 8.15 Retenção e time travel são a mesma decisão
+
+O padrão do Delta guarda arquivo apagado por 7 dias, e é esse período que define até onde o
+time travel alcança. As duas coisas costumam ser tratadas como assuntos separados — limpeza
+de um lado, recurso de consulta do outro — e são o mesmo número visto de dois lados.
+
+Sete dias não servem aqui, e o motivo vem da decisão 8.10: o pipeline é semanal. Uma carga
+defeituosa no domingo só seria notada na leitura seguinte, e a janela para voltar atrás já
+teria fechado. Catorze dias dão dois ciclos.
+
+| Propriedade | Valor | Por quê |
+|---|---|---|
+| `delta.deletedFileRetentionDuration` | 14 dias | dois ciclos do job semanal |
+| `delta.logRetentionDuration` | 30 dias | o log é barato e sustenta `DESCRIBE HISTORY` |
+
+Os dois diferem de propósito. Passados 14 dias o conteúdo antigo some, mas o log ainda diz
+o que aconteceu: dá para saber que houve uma carga de 12 mil linhas naquele domingo, ainda
+que não dê mais para consultá-la.
+
+As tabelas `lote_` ficam fora da política. São materialização intermediária do `MERGE`,
+reescritas inteiras a cada execução, então acumulam mais versões que qualquer outra e
+nenhuma delas tem valor de auditoria.
+
+#### O `VACUUM` não entrou no job, e a ausência é a decisão
+
+O `VACUUM` apaga exatamente o que o time travel usaria, e não tem desfazer. Numa tarefa
+agendada ele rodaria sem ninguém olhando, na mesma execução em que uma carga defeituosa
+acabou de gravar — e destruiria a versão boa junto.
+
+O volume também não justifica: são poucos MB, e arquivo obsoleto não chega perto de custar
+o que custa perder a possibilidade de voltar. O comando fica montado em
+`manutencao.sql_vacuum` e roda à mão quando houver motivo.
+
+#### A pergunta que só o time travel responde
+
+A recuperação da seção 5.7 levou a bronze de 5.646 para 18.537 linhas, e a proporção de
+commits de bot caiu de 10,5% para 4,9%. As linhas antigas estavam todas corretas e a
+conclusão tirada delas estava errada por um fator de dois.
+
+Hoje essa comparação depende do que ficou anotado neste documento. Com as duas versões
+dentro da retenção, as duas leituras existem ao mesmo tempo na tabela, e
+`sql_contagem_por_versao` as põe lado a lado. É a diferença entre um número citado e um
+número consultável.
+
+---
+
+### 8.16 Medir em vez de supor
+
+Vários comentários deste projeto afirmam coisas sobre custo. O de `bronze.ddl` diz que
+particionar por repositório geraria arquivos pequenos demais. O de `consumo` diz que
+recalcular a visão é irrelevante. Nenhum tinha número atrás.
+
+Isso é o oposto do método do resto do documento, onde toda afirmação sobre o dado traz a
+medida que a sustenta. A diferença é que ali havia dado e aqui não: com 18.673 commits, tudo
+cabe numa partição, nenhum shuffle vai a disco, e o motor esconde qualquer escolha ruim
+atrás de dados pequenos.
+
+`src/radar/desempenho.py` não otimiza nada. Ele instrumenta, e responde três perguntas:
+
+| Pergunta | Instrumento |
+|---|---|
+| Como está guardado? | `detalhe_da_tabela`: arquivos e tamanho médio |
+| O dado é desbalanceado? | `sql_distribuicao`: concentração por chave |
+| Quanto custa, de fato? | `medir` e `resumo_do_plano` |
+
+#### Os dois shuffles do pipeline são caros por motivos diferentes
+
+Este é o achado de projeto, e ele aparece antes de qualquer medição de tempo.
+
+`deduplicar()` faz `Window.partitionBy(repo, sha)` sobre toda a landing zone. Cardinalidade
+altíssima, uma linha por chave, distribuição perfeitamente plana: é um shuffle caro **por
+volume**.
+
+Toda análise agrupa por `repo` sozinho. Catorze valores distintos, e `duckdb/duckdb` responde
+por cerca de 31% das linhas: é um shuffle caro **por concentração**. A partição que leva um
+terço do dado demora um terço do tempo total, e o estágio inteiro só termina quando ela
+terminar.
+
+A consequência prática é que otimização que sirva para um não serve para o outro. Compactar
+arquivo ajuda o primeiro; balancear a chave ajudaria o segundo.
+
+#### Por que a medição usa `noop` e não `count()`
+
+Cronometrar `spark.sql(...).count()` mede a consulta errada. O otimizador sabe que só a
+contagem importa e poda projeção, junção e até leitura de coluna, e o tempo que sai é de um
+plano que ninguém vai executar. `write.format("noop")` materializa toda linha e todo campo e
+descarta na saída.
+
+É a mesma lição da entrada 19 do diário, noutro alvo: a pergunta feita ao instrumento errado
+devolve resposta verdadeira e inútil.
+
+#### A escala sintética preserva a distorção
+
+`replicar` multiplica o volume mudando a chave natural e deixando `repo` intacto. As duas
+metades importam.
+
+A chave precisa mudar porque cópias idênticas seriam colapsadas de volta pela deduplicação e
+pelo `MERGE`: o volume subiria na leitura e não no destino, e a medida seria de uma carga que
+não existe.
+
+`repo` precisa ficar porque o desbalanceamento é o objeto da medida. Uma escala que
+distribuísse por igual mediria um dado que este ecossistema não tem.
+
+#### O limite declarado
+
+Tempo de parede num cluster gerenciado varia com vizinho, cache de disco e estado do motor.
+Duas execuções seguidas da mesma consulta não dão o mesmo número, e a primeira quase sempre é
+a mais lenta — por isso `medir` repete e devolve a mediana, com a fria acessível ao lado.
+
+O que se registra deste experimento não é o tempo absoluto, que não se compara entre sessões,
+e sim: o tamanho médio de arquivo, a concentração por `repo` (que é propriedade do
+ecossistema, não do cluster), a **razão** entre volume e tempo, e o que mudou no plano.
+
+Se uma medida contradisser um comentário do código, o comentário é que está errado.
 
 ---
 
@@ -1218,6 +1471,7 @@ motivou 8.12.
 | 6 | Endpoint `issues` + `fct_issue` | Snapshot acumulado, dimensão conformada, coleta convergente sem `until` | ✅ concluída |
 | 7 | CI | GitHub Actions, grupos de dependência, matriz de versões | ✅ concluída |
 | 8 | As perguntas da seção 2 respondidas | Consulta analítica sobre star schema, bus factor, leitura com limite declarado | ✅ concluída |
+| 9 | Consumo, restrições do motor e instrumentação de custo | Visões para dashboard, `CHECK` contra quarentena, retenção e time travel, medição de plano e desbalanceamento | ✅ concluída |
 
 ### 10.2 Detalhe da Etapa 1 (concluída)
 
@@ -1667,7 +1921,38 @@ não é a única forma de manter um projeto, e revisão e triagem não aparecem 
 e parte do ecossistema, os projetos Apache em particular, conduz discussão fora do GitHub.
 Leitura sem limite declarado é pior que leitura ausente.
 
-### 10.10 Convenção de mensagens de commit
+### 10.10 Detalhe da Etapa 9 (concluída)
+
+Três lacunas que não eram de raciocínio, e sim de superfície: o pipeline terminava sem
+consumidor, o Delta oferecia mecanismos que o projeto não usava, e nenhuma afirmação sobre
+custo tinha número atrás.
+
+| Sub-passo | Entrega |
+|---|---|
+| 9.1 | `consumo.py`: as análises expostas como visão, com o portão virando coluna |
+| 9.2 | `dashboards/painel_de_saude.md`: o layout, versionado |
+| 9.3 | `manutencao.py`: dez restrições `CHECK` na gold, retenção e leitura de versões |
+| 9.4 | `desempenho.py`: armazenamento, desbalanceamento, plano e cronometragem |
+| 9.5 | Notebooks `12`, `13` e `14`; as duas primeiras viraram tarefa do job |
+| 9.6 | Guarda de ASCII em `test_plataforma.py` |
+
+As decisões estão em 8.13 a 8.16. Três coisas valem registro à parte.
+
+**A fronteira do `CHECK` foi o produto, não o recurso.** Adotar restrição do motor é trivial;
+saber que ela pertence à gold e não à silver é o que a torna correta. O critério — a violação
+é defeito nosso ou sujeira da origem? — está codificado como teste, e `dias_ate_o_commit >= 0`
+tem uma guarda que impede a rejeição de ser desfeita sem passar por ela.
+
+**A regra 10.12 era afirmação e virou verificação.** Prosa em `.py` deve ser ASCII, e nada
+exercia isso. A regra foi violada na primeira vez que um módulo novo foi escrito nesta etapa,
+e detectada à mão. O teste que faltava agora existe, e é o mesmo argumento da decisão 8.11 num
+caso menor: enquanto a verificação não existe, a afirmação não se sustenta sozinha.
+
+**O que a Etapa 9 não fez.** Nenhum número de desempenho entrou neste documento ainda. O
+notebook `14` existe para produzi-los, e escrevê-los antes de medir seria exatamente o que a
+seção 8.16 critica. Eles entram depois da primeira execução, com a data ao lado.
+
+### 10.11 Convenção de mensagens de commit
 
 Conventional Commits:
 
@@ -1680,7 +1965,7 @@ Conventional Commits:
 | `refactor:` | Reestruturação sem mudança de comportamento |
 | `chore:` | Manutenção, configuração |
 
-### 10.11 Regras de manutenção deste documento
+### 10.12 Regras de manutenção deste documento
 
 1. Ao final de cada etapa, atualizar a tabela de status da seção 10.1
 2. Toda decisão com alternativa rejeitada vira uma linha nas seções 4 a 8. Registre
@@ -1695,10 +1980,14 @@ Conventional Commits:
    teste é exceção: `"José"` num payload sintético existe justamente para exercitar o
    acento
 
-### 10.12 Melhorias planejadas
+### 10.13 Melhorias planejadas
 
-Três itens desta lista saíram porque foram feitos: a truncagem visível com recuperação do
-histórico (seção 5.7), o Secret Scope (8.7) e o GitHub Actions (8.11). O que resta:
+Seis itens desta lista saíram porque foram feitos: a truncagem visível com recuperação do
+histórico (seção 5.7), o Secret Scope (8.7), o GitHub Actions (8.11), a camada de consumo
+(8.13), as restrições do motor (8.14) e a política de retenção (8.15). O que resta:
+
+**Rodar o experimento de custo.** O instrumento existe e os números ainda não. É a única
+pendência da Etapa 9, e ela é de execução, não de código.
 
 **Com dado já coletado, faltando só modelagem.** Os pull requests estão na silver desde a
 Etapa 6, separados das issues, e ninguém os consulta ainda. Um `fct_pull_request` sairia sem
@@ -1712,6 +2001,10 @@ mínimo por issue, e não uma requisição por issue.
 **De infraestrutura.** Concorrência controlada na ingestão, com vários repositórios em
 paralelo respeitando a quota. É a mudança com melhor retorno em tempo de execução, e a que
 mais arrisca a quota se for feita sem cuidado.
+
+**O dashboard como arquivo.** O layout é uma especificação que se segue à mão. Exportar o
+`.lvdash.json` depois de montá-lo uma vez o tornaria reaplicável, e a especificação viraria a
+documentação do que ele contém.
 
 **De escopo profissional.** `dbt` sobre a camada gold, para exercitar analytics engineering, e
 publicar a linhagem que o Unity Catalog já gera.

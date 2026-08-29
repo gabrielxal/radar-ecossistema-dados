@@ -55,11 +55,13 @@ resources:
       #                                      -> silver_commits -> qualidade_silver
       #   repositorios ------------------------------------------\
       #   issues ------------------------------------------------\
-      #                                                dimensoes -> fatos
+      #                                                dimensoes -> fatos -> consumo
+      #                                                                   -> manutencao
       #
       # `repositorios` e `issues` nao dependem de nada e rodam em paralelo com
       # a ingestao de commits. `dimensoes` espera as tres silvers: le de todas,
       # porque `dim_autor` e conformada entre os fatos que apontam para ela.
+      # `consumo` e `manutencao` fecham a execucao em paralelo.
       tasks:
         - task_key: ingestao_commits
           notebook_task:
@@ -161,4 +163,31 @@ resources:
           notebook_task:
             notebook_path: notebooks/09_fatos
             source: GIT
+          environment_key: Default
+
+        # As duas ultimas dependem de `fatos` e nao uma da outra, entao rodam
+        # em paralelo. Sao baratas: nenhuma le dado, so metadado.
+
+        # Recria as visoes do painel. Precisa rodar depois dos fatos porque
+        # `CREATE OR REPLACE VIEW` resolve os nomes na criacao.
+        - task_key: consumo
+          depends_on:
+            - task_key: fatos
+          notebook_task:
+            notebook_path: notebooks/12_consumo
+            source: GIT
+          environment_key: Default
+
+        # Restricoes CHECK da gold e politica de retencao. Vem depois dos
+        # fatos de proposito: aplicada sobre a tabela recem-carregada, a
+        # restricao valida o que a execucao acabou de gravar, e a tarefa vira
+        # a ultima rede da carga em vez de so configuracao.
+        - task_key: manutencao
+          depends_on:
+            - task_key: fatos
+          notebook_task:
+            notebook_path: notebooks/13_manutencao
+            source: GIT
+            base_parameters:
+              recriar: "nao"
           environment_key: Default

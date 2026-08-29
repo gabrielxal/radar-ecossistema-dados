@@ -2,21 +2,43 @@
 
 [![testes](https://github.com/gabrielxal/radar-ecossistema-dados/actions/workflows/testes.yml/badge.svg)](https://github.com/gabrielxal/radar-ecossistema-dados/actions/workflows/testes.yml)
 
-Pipeline de dados fim-a-fim que coleta a atividade de 14 projetos open source de engenharia
-de dados pela API do GitHub e entrega um modelo dimensional capaz de responder perguntas
-sobre a saúde desses projetos.
+Projeto de estudo de engenharia de dados. A ideia foi partir de uma pergunta real, construir o
+pipeline inteiro necessário para respondê-la, e registrar tudo que deu errado no caminho.
 
 `Python` · `PySpark` · `Delta Lake` · `Databricks` · `Kimball` · `pytest`
 
-## A pergunta
+---
+
+## O que o projeto faz
+
+Coleta a atividade de 14 projetos open source do ecossistema de dados pela API do GitHub,
+organiza esse dado em três camadas sobre Delta Lake, e monta um modelo dimensional que responde
+perguntas sobre a saúde desses projetos.
+
+Em números, hoje: 18.673 commits, 73.682 issues e pull requests, e uma série de fotos diárias
+que cresce sozinha desde que a orquestração entrou no ar.
+
+### A pergunta que originou tudo
 
 > Quais ferramentas do ecossistema de engenharia de dados estão saudáveis, e quais estão
 > morrendo? Onde há risco de concentração de manutenção?
 
-O recorte é deliberado: um engenheiro de dados analisando as ferramentas de engenharia de
-dados. Sinaliza domínio de mercado, e não apenas domínio de ferramenta.
+O recorte foi escolhido de propósito: um engenheiro de dados analisando as ferramentas de
+engenharia de dados.
 
-### Os 14 repositórios, por camada
+Dela saíram cinco perguntas menores, e cada uma exigiu uma peça diferente do modelo. Foi assim
+que o projeto ganhou forma, e é por isso que ele tem SCD2 e três tipos de fato em vez de uma
+tabela só.
+
+| Pergunta | O que ela obrigou a construir |
+|---|---|
+| O projeto acelera ou desacelera, por contribuidor ativo? | série temporal e normalização por autor |
+| Bus factor: quantas pessoas concentram metade dos commits? | dimensão de autor conformada entre dois fatos |
+| Quanto tempo uma issue leva para fechar? | fato com múltiplos marcos, o snapshot acumulado |
+| O histórico antigo muda quando o repositório muda? | Slowly Changing Dimension tipo 2 |
+| O ecossistema é sustentado por trabalho remunerado ou voluntariado? | dimensão de tempo com dois papéis |
+
+### Os 14 repositórios, e por que estes
 
 | Camada | Repositórios | |
 |---|---|---|
@@ -28,73 +50,128 @@ dados. Sinaliza domínio de mercado, e não apenas domínio de ferramenta.
 | Qualidade | `great_expectations` | 1 |
 | Catálogo | `datahub` | 1 |
 
-Três onde existe disputa real, um ou dois onde não existe.
+Três nas camadas onde existe disputa real, um ou dois onde não existe.
 
-Isso importa para a análise, e não é só arrumação. Comparar `airflow` com `duckdb` diz pouco,
-porque resolvem problemas diferentes. Comparar `delta` com `iceberg` e `hudi` diz muito: são
-três projetos disputando exatamente o mesmo lugar, e bus factor e ritmo entre eles respondem
-qual está ganhando.
+Isso muda o que a análise consegue dizer. Comparar `airflow` com `duckdb` diz pouco, porque
+resolvem problemas diferentes. Comparar `delta` com `iceberg` e `hudi` diz muito: são três
+projetos disputando o mesmo lugar, e bus factor e ritmo entre eles apontam qual está ganhando.
 
-Os três trios foram escolhidos com essa propriedade. Orquestração cobre três gerações de
-abordagem; processamento cobre distribuído, embarcado e single-node, que são três respostas ao
-mesmo problema em escalas diferentes.
+O que ficou de fora limita a conclusão, e vale dizer antes que o leitor perceba sozinho:
 
-### O que ficou de fora, e o que isso custa
-
-| Ausente | Efeito na conclusão |
+| Ausente | Efeito |
 |---|---|
 | Streaming (`kafka`, `flink`) | metade da disciplina não é medida; tudo aqui é batch |
 | OLAP distribuído (`clickhouse`, `druid`) | `duckdb` e `trino` são query engines, não bancos analíticos |
-| BI (`superset`, `metabase`) | o pipeline termina na camada gold e ninguém consome |
+| BI (`superset`, `metabase`) | a camada de apresentação do stack não é medida; o painel deste projeto é do Databricks, que é produto fechado |
 | Ingestão declarativa (`dlt`, `airbyte`) | a camada EL do stack moderno não aparece |
 
-O escopo é o que torna a pergunta respondível, e também o que limita a resposta. "O ecossistema
-de dados" aqui significa estas sete camadas, não o mercado inteiro.
+Databricks e S3 não entram por outro motivo: são produtos fechados, sem repositório público, e
+um pipeline que mede saúde de repositório não tem o que medir neles.
 
-Databricks e S3 não entram por um motivo diferente: são produtos fechados, sem repositório
-público. Um pipeline que mede saúde de repositório não tem o que medir neles. A peça deles que
-aparece é `delta-io/delta`, aberta em 2019.
+---
 
-## O que o pipeline já respondeu
+## O que eu aprendi construindo isto
 
-A primeira pergunta filha: o ecossistema é sustentado por trabalho remunerado em horário
-comercial, ou por voluntariado?
+Estas são as lições que sobraram depois de tudo, e nenhuma veio de tutorial. As seis primeiras
+custaram um erro registrado na seção de dificuldades; a última veio de uma decisão, e não de um
+tropeço.
 
-```
-dia útil       2.624 commits/dia (média)
-fim de semana    665 commits/dia (média)   →  25,4%
-```
+### 1. O defeito mais caro é o que não falha
 
-Trabalho remunerado. O fim de semana é consistente, com 1.331 commits em 90 dias, mas roda a
-um quarto do ritmo de um dia útil, contra os 28,6% que uma distribuição uniforme daria.
-Sábado supera domingo em 13%, o que sugere transbordo da semana em vez de tempo dedicado.
+O pipeline apagou três meses de histórico de cinco repositórios e reportou `status='ok'`.
+Nenhuma bateria de qualidade acusou, porque todas verificavam **o dado que chegou** e nenhuma
+perguntava **o que deveria ter chegado**.
 
-O que torna a resposta interessante é que a leitura ingênua do mesmo fato dá outro resultado:
+Aprendi que essas são duas perguntas diferentes, e que a segunda quase nunca é feita. Hoje o
+projeto tem uma reconciliação por camada: `landing = bronze` e `bronze = soma dos destinos da
+silver`. É a verificação que teria pego o defeito no dia em que ele nasceu.
 
-| Dia | Leitura bruta | Leitura corrigida |
-|---|---|---|
-| segunda | 28,2% | 16,8% |
-| terça | 17,1% | 19,9% |
-| quarta | 16,0% | 19,4% |
-| quinta | 16,2% | 17,9% |
-| sexta | 14,0% | 16,7% |
-| sábado | 4,4% | 4,9% |
-| domingo | 4,1% | 4,3% |
+### 2. Amostra correta pode gerar conclusão errada
 
-Na leitura bruta, segunda-feira aparece como o dia mais produtivo do ecossistema, quando é o
-penúltimo. Três decisões analíticas separam uma coluna da outra: usar a data de autoria em
-vez da data de commit, descartar commits registrados mais de 7 dias depois de escritos, e
-excluir bots. Nenhuma veio de dado novo. Elas ficaram visíveis porque o modelo dimensional as
-expõe como escolha, e não embutidas numa consulta direta sobre a camada silver.
+Depois de recuperar o histórico, a proporção de commits feitos por bot caiu de 10,5% para 4,9%.
+As linhas que eu tinha antes estavam todas certas; a conclusão tirada delas estava errada por um
+fator de dois.
 
-O detalhamento está em [`docs/PROJETO.md`](docs/PROJETO.md), seção 10.6.
+O motivo é estrutural: a perda atingia justamente os repositórios maiores, porque eram eles que
+estouravam o teto de páginas. **Perda silenciosa raramente é uniforme.** Ela segue o mecanismo
+que a causou, e por isso desloca proporções, não apenas contagens.
 
-### Onde há risco de concentração de manutenção
+Essa lição voltou duas vezes depois, com issues, e nas duas eu já sabia o que procurar.
 
-Bus factor é quantas pessoas concentram metade dos commits. O nome vem de quantas
-precisariam ser atropeladas por um ônibus para o projeto parar.
+### 3. Restrição gera arquitetura melhor que boa prática copiada
 
-| Repositório | Bus factor | Autores em 90d | Commits em 90d |
+A ingestão é incremental por watermark com ETag não porque incremental é elegante, mas porque a
+API dá 5.000 requisições por hora e o histórico não cabe numa carga só. Uma sondagem da API
+definiu a arquitetura antes de eu escrever a primeira linha de código.
+
+A diferença aparece no resultado: cada decisão tem uma restrição atrás dela, e dá para explicar
+todas sem recorrer a "é assim que se faz".
+
+### 4. O modelo dimensional expõe a decisão analítica
+
+A mesma pergunta, sobre o mesmo fato, admitiu duas respostas opostas. Na leitura ingênua,
+segunda-feira era o dia mais produtivo do ecossistema. Na leitura corrigida, era o penúltimo.
+
+Três decisões separavam uma da outra, e nenhuma veio de dado novo: usar a data de autoria em vez
+da data de commit, descartar commits registrados muito depois de escritos, e excluir bots.
+
+Numa consulta direta sobre a camada silver essas escolhas estariam embutidas e invisíveis. O
+modelo dimensional as obriga a aparecer, e é isso que permite questioná-las.
+
+### 5. Acrescentar um fato quebra coisas que ninguém declarou
+
+Ao ligar `fct_issue` ao modelo, quatro coisas quebraram no mesmo dia. Nenhuma no código novo:
+todas em código antigo que assumia algo sobre o modelo sem nunca ter escrito o quê.
+
+`montar_fct_issue` não menciona `dim_tempo` em lugar nenhum, e mesmo assim depende do intervalo
+que ela cobre. Uma issue de 2015 gerou 79.794 chaves de tempo órfãs, porque o calendário tinha
+sido gerado a partir de commits de 90 dias.
+
+Isso tem nome fora daqui: acoplamento sem declaração. E o que reduziu o custo foi **onde** cada
+verificação morava. As que estavam em `src/` com teste falharam na minha máquina em segundos; as
+que estavam em `assert` de notebook falharam no Databricks, depois de esperar cluster.
+
+### 6. Hipótese escrita antes de medir às vezes se mostra errada, e isso é bom
+
+Suspeitei que o `airflow` inflava os próprios números fechando issue parada por bot. Escrevi a
+suspeita, medi, e estava errado: ele tem uma das menores taxas de abandono do conjunto.
+
+O caso era o `iceberg`, com 43% das issues fechadas sem serem resolvidas. E isso desmontou uma
+classificação que eu tinha feito uma hora antes.
+
+Registrar a hipótese antes do resultado foi o que tornou o erro visível. Se eu tivesse medido
+primeiro e escrito depois, teria escrito só a conclusão certa e perdido a lição.
+
+### 7. Adotar um recurso é fácil; saber onde ele não cabe é a decisão
+
+O Delta oferece `CHECK` constraints, e a tentação é ligar em tudo. Mas `CHECK` aborta a
+transação inteira quando uma linha viola, e é justamente isso que eu tinha recusado na silver:
+um registro torto da origem não pode derrubar a carga semanal.
+
+A pergunta que separou os dois casos não é sobre o recurso, é sobre a origem do defeito:
+
+> uma violação aqui é sujeira que chegou, ou defeito do meu próprio código?
+
+A bronze e a silver ingerem dado externo, então a resposta é sujeira, e o instrumento certo é a
+quarentena — isola a linha, registra o motivo, deixa a carga passar. A gold não ingere nada:
+ela é derivada pelo meu código. Ali a resposta é defeito meu, e carga que grava defeito de
+derivação deve mesmo abortar.
+
+O contraexemplo é que fixou a regra. `dias_ate_o_commit >= 0` parece a restrição mais óbvia do
+modelo e foi rejeitada, porque relógio de contribuidor adiantado produz negativo legítimo.
+Existe um teste que falha se ela entrar: decisão rejeitada sem guarda é decisão que volta.
+
+---
+
+## Resumo dos resultados
+
+Leitura de 2026-08-25, sobre 90 dias de commits e o histórico completo de issues.
+
+### Onde há risco de concentração
+
+Bus factor é quantas pessoas concentram metade dos commits.
+
+| Repositório | Bus factor | Autores | Commits em 90d |
 |---|---|---|---|
 | great-expectations | **1** | 13 | 93 |
 | trino | 3 | 58 | 826 |
@@ -111,19 +188,18 @@ precisariam ser atropeladas por um ônibus para o projeto parar.
 | iceberg | 12 | 98 | 395 |
 | airflow | 16 | 324 | 2.010 |
 
-O `great_expectations` tem uma pessoa respondendo por metade dos commits num time de 13. É o
-único ponto único de falha da lista.
+O `great_expectations` é o único ponto único de falha do conjunto: uma pessoa responde por
+metade dos commits num time de 13.
 
-`duckdb` chama atenção pelo oposto: 143 contribuidores e apenas 4 concentram metade, com
-5.657 commits no período. É o núcleo mais denso e ao mesmo tempo o repositório mais ativo,
-por larga margem.
+O `duckdb` chama atenção pelo oposto. Tem 143 contribuidores, e 4 concentram metade, com 5.657
+commits no período. É o núcleo mais denso e ao mesmo tempo o repositório mais ativo, por larga
+margem.
 
 ### Acelerando ou desacelerando
 
-A pergunta é sobre volume **e** sobre volume por pessoa, porque as duas colunas podem
-discordar. Comparando dois períodos de 45 dias:
+Dois períodos de 45 dias, comparando volume e volume por pessoa.
 
-| Repositório | Volume | Por autor | O que é |
+| Repositório | Volume | Por autor | Leitura |
 |---|---|---|---|
 | dagster | **-52%** | -11% | time e produção caindo juntos |
 | great-expectations | **+79%** | -11% | time dobrou; a queda por autor é gente nova entrando |
@@ -131,22 +207,20 @@ discordar. Comparando dois períodos de 45 dias:
 | iceberg | +17% | +23% | menos gente entregando mais |
 | airflow | -10% | -8% | estável |
 
-O `dagster` é o único onde as duas colunas caem forte junto, e é o sinal mais claro de
-declínio no conjunto.
+O `dagster` é o único onde as duas colunas caem forte junto.
 
-O `great_expectations` mostra por que ler só a coluna da direita engana: `-11%` por autor
-parece deterioração, e o volume quase dobrou.
+O `great_expectations` mostra por que ler só a coluna da direita engana: `-11%` por autor parece
+deterioração, e o volume quase dobrou.
 
-**Um confundidor declarado:** onze dos catorze têm variação por autor negativa. As janelas
-são 27/05 a 11/07 e 11/07 a 25/08, e a segunda pega agosto inteiro, mês de férias no
-hemisfério norte de onde vem a maior parte destes contribuidores. Boa parte da queda
-generalizada é provavelmente sazonal. Isso não afeta os casos extremos, mas impede ler
-qualquer `-5%` como sinal.
+Onze dos catorze têm variação por autor negativa, o que é uniforme demais para ser coincidência.
+As duas janelas são 27/05 a 11/07 e 11/07 a 25/08, e a segunda pega agosto inteiro, mês de
+férias no hemisfério norte de onde vem a maior parte destes contribuidores. Boa parte da queda
+generalizada provavelmente é sazonal.
 
 ### Fechar rápido não é o mesmo que dar conta
 
-73.682 issues, com o histórico completo dos catorze. Duas medidas com significados opostos:
-uma olha o que terminou e mede vazão, a outra olha o que não terminou e mede backlog.
+73.682 issues. Duas medidas com significados opostos: uma olha o que terminou e mede vazão, a
+outra olha o que não terminou e mede backlog.
 
 | Repositório | Aberto | Mediana até fechar | Idade do backlog aberto |
 |---|---|---|---|
@@ -165,28 +239,23 @@ uma olha o que terminou e mede vazão, a outra olha o que não terminou e mede b
 | spark | 39% | 101 dias | 63 dias |
 | duckdb | 5% | **8 dias** | **35 dias** |
 
-Três comportamentos aparecem.
+`dagster`, `trino` e `sqlfluff` fecham em duas semanas e carregam backlog de três a quatro anos:
+o que entra e é simples sai rápido, o resto envelhece.
 
-**Triagem do fácil.** `dagster`, `trino` e `sqlfluff` fecham em duas semanas e carregam backlog
-de três a quatro anos. O que entra e é simples sai rápido; o resto envelhece.
+`hudi` e `delta` fecham devagar, entre 110 e 207 dias, e o backlog aberto é novo.
 
-**Fila em ordem.** `hudi` e `delta` fecham devagar, entre 110 e 207 dias, e o backlog aberto é
-novo. Demoram mais por issue e deixam menos para trás.
+`duckdb` é o único com as duas medidas boas ao mesmo tempo, e somado a 5.657 commits em 90 dias
+é o mais saudável do conjunto por qualquer ângulo medido aqui.
 
-**As duas boas.** `duckdb` é o único com vazão rápida e backlog jovem ao mesmo tempo: fecha em
-8 dias e a issue aberta mediana tem 35. Somado a 5.657 commits em 90 dias, é o repositório mais
-saudável do conjunto por qualquer ângulo medido aqui.
-
-Olhando só a coluna do meio, `polars` pareceria 50 vezes mais eficiente que `hudi`. Olhando só
-a da direita, o oposto. É por isso que a consulta tem as duas.
+Olhando só a coluna do meio, `polars` pareceria 50 vezes mais eficiente que `hudi`. Olhando só a
+da direita, o oposto.
 
 ### Fechar não é o mesmo que resolver
 
 As duas medidas acima ainda deixam uma confusão de pé: projeto que fecha issue parada por
 inatividade aparece com vazão rápida e backlog jovem sem ter atendido ninguém.
 
-A silver guarda `motivo_estado`, e `not_planned` separa o fechamento por decisão do fechamento
-por abandono.
+O campo `motivo_estado` separa os dois casos.
 
 | Repositório | Abandonadas | Resolvidas | Taxa |
 |---|---|---|---|
@@ -204,24 +273,17 @@ por abandono.
 | dagster | 227 | 3.273 | 6,5% |
 | sqlfluff | 56 | 3.382 | **1,6%** |
 
-**Isto refuta uma hipótese registrada antes de medir.** A suspeita era o `airflow`, por ter 3%
-de abertas e mediana de 10 dias. Ele tem a terceira menor taxa de abandono do conjunto: 10.702
-issues resolvidas contra 841 abandonadas. A vazão dele é real.
+O `iceberg` fecha quase metade sem resolver, e isso muda a leitura dele na tabela anterior: 195
+dias até fechar com o backlog mais jovem dos catorze não é fila trabalhada em ordem, é fila
+expurgada.
 
-**O caso é o `iceberg`.** Quase metade do que fecha, fecha por abandono. E isso muda a leitura
-dele na tabela anterior: 195 dias até fechar com o backlog aberto mais jovem dos catorze não é
-fila trabalhada em ordem, é fila expurgada. A issue fica parada meses, é fechada como não
-planejada, e sai do estoque sem ter sido atendida.
-
-`sqlfluff` é o oposto exato, com 1,6%. A mediana de 12 dias dele é resolução de verdade, e o
+O `sqlfluff` é o oposto exato. Com 1,6%, a mediana de 12 dias dele é resolução de verdade, e o
 backlog de 1.217 dias é acúmulo de verdade.
 
-**O `spark` mede outra coisa.** São 100 issues, nenhuma aberta com mais de 176 dias, num
-projeto de 2010. O canal de discussão dele é o JIRA, e o que aparece aqui é recente demais para
-representar o ciclo de vida real. Os 57,6% de abandono dele saem de 59 issues fechadas, amostra
-pequena demais para significar algo.
+O `spark` mede outra coisa: são 100 issues num projeto de 2010, porque o canal de discussão dele
+é o JIRA.
 
-### Quem reporta e quem corrige são populações diferentes
+### Quem reporta e quem corrige
 
 | | |
 |---|---|
@@ -229,45 +291,88 @@ pequena demais para significar algo.
 | Autores de issue (histórico) | 22.893 |
 | Presentes nos dois | 542 |
 
-Dos que commitaram no período, 41% também abriram issue. O caminho inverso não é
-interpretável, porque as janelas são assimétricas: quem commitou em 2019 e abriu issue em 2019
-aparece só do lado das issues.
+Dos que commitaram no período, 41% também abriram issue. O caminho inverso não é interpretável,
+porque as janelas são assimétricas.
 
-O que fica de pé é a consequência de projeto: sem uma dimensão de autor conformada entre os
-dois fatos, 95% da população que participa cairia no membro desconhecido, e a pergunta sobre
-concentração de manutenção não teria como ser respondida fora do núcleo.
+A consequência de projeto é que sem uma dimensão de autor conformada entre os dois fatos, 95% da
+população que participa cairia no membro desconhecido.
 
-## O que deu errado no caminho
+### Trabalho remunerado ou voluntariado
 
-Estas duas entradas são o motivo de o projeto existir em forma de documento, e não só de
-código.
+```
+dia útil       2.624 commits/dia (média)
+fim de semana    665 commits/dia (média)   →  25,4%
+```
 
-### O pipeline apagava histórico e reportava sucesso
+Trabalho remunerado. O fim de semana é consistente, com 1.331 commits em 90 dias, mas roda a um
+quarto do ritmo de um dia útil, contra os 28,6% que uma distribuição uniforme daria.
 
-Duas proteções corretas isoladamente se combinaram num defeito. O `limite_paginas` protegia a
-quota da API. O watermark registrava até onde a coleta tinha chegado. Como a API devolve
-commits do mais novo para o mais antigo, o teto cortava a coleta no meio da janela e o
-watermark avançava como se ela tivesse sido percorrida inteira. O que ficou para trás nunca
-mais era buscado.
+---
 
-Cinco dos catorze repositórios estavam com até dois meses faltando, com `status='ok'` na
-tabela de controle. Nenhuma bateria de qualidade acusou, porque todas verificavam o dado que
-chegou e nenhuma perguntava o que deveria ter chegado.
+## Dificuldades encontradas
 
-A correção tem três partes: `paginar()` informa quando parou pelo teto, o controle grava
-`status='truncado'`, e o watermark não avança nesse caso. A recuperação custou 311
-requisições de uma quota de 5.000 por hora e levou a bronze de 5.646 para 18.537 linhas.
+O diário de bordo completo tem 29 entradas, em [`docs/PROJETO.md`](docs/PROJETO.md). Estas são as
+que mais custaram.
 
-### A amostra estava correta e a conclusão estava errada
+### O pipeline apagou histórico e disse que estava tudo bem
 
-Depois da recuperação, a proporção de commits de bot caiu de 10,5% para 4,9%.
+Duas proteções corretas isoladamente se combinaram num defeito.
 
-As 5.646 linhas anteriores estavam todas certas. A conclusão tirada delas estava errada por
-um fator de dois, porque a truncagem atingia justamente os repositórios maiores, que eram os
-que estouravam o teto de páginas. Perda silenciosa raramente é uniforme: ela segue o
-mecanismo que a causou e desloca proporções, não apenas contagens.
+O `limite_paginas` protegia a quota da API. O watermark registrava até onde a coleta tinha
+chegado. Como a API devolve commits do mais novo para o mais antigo, o teto cortava a coleta no
+meio da janela e o watermark avançava como se ela tivesse sido percorrida inteira. O que ficou
+para trás nunca mais era buscado.
 
-## Arquitetura
+Cinco dos catorze repositórios estavam com até dois meses faltando, todos com `status='ok'`.
+
+A correção tem três partes: `paginar()` passou a informar quando parou pelo teto, o controle
+grava `status='truncado'`, e o watermark não avança nesse caso. A recuperação custou 311
+requisições e levou a bronze de 5.646 para 18.537 linhas.
+
+Depois disso o teto deixou de decidir quanto histórico se perde, de dois jeitos conforme o que a
+API oferece. Em `/commits`, que aceita `until`, a coleta virou fatiada em janelas de uma semana.
+Em `/issues`, que não aceita, a lista passou a ser percorrida em ordem crescente: o corte pelo
+teto descarta os registros que a execução seguinte vai buscar de qualquer forma.
+
+### O mesmo erro voltou com issues, e dessa vez eu esperava
+
+O backfill de issues leva várias execuções nos repositórios grandes. Enquanto ele não termina, o
+que chegou é a parte mais velha e já fechada do backlog, porque issue aberta recebe comentário e
+fica no fim da caminhada crescente.
+
+O `duckdb` chegou a aparecer com **zero issues abertas** em 5.048. Não era defeito de código, era
+leitura de coleta incompleta.
+
+A resposta foi uma consulta que junta a tabela de controle com a silver e devolve uma coluna
+`confiavel`. Ela é o portão da pergunta sobre issues, e existe porque a mesma armadilha já tinha
+custado caro uma vez.
+
+### Diagnóstico feito com a ferramenta errada custou três rodadas
+
+Um defeito corrigido em `src/` continuava aparecendo no Databricks. Módulo já importado permanece
+em `sys.modules` pelo resto da vida do interpretador, e o `git pull` não desfaz isso.
+
+O que fez perder tempo foi o diagnóstico: usei `inspect.getsource(modulo)` para conferir se o
+código carregado era o novo. Ele lê **o arquivo em disco**, que já estava atualizado, e respondeu
+que sim. A pergunta certa era `hasattr(modulo, "SIMBOLO_NOVO")`, que interroga a memória.
+
+Pergunta feita ao alvo errado devolve resposta verdadeira e inútil.
+
+### Restrições da plataforma apareceram só em execução
+
+Três incidentes com a mesma raiz: o Serverless do Databricks não é um Spark comum.
+
+`spark.conf` tem lista fechada de permissões, `df.cache()` não existe, e magics do IPython não são
+reconhecidas. Nada disso aparece em teste local, e todos apareceram no meio de uma carga.
+
+Hoje há uma bateria de testes que lê o código-fonte e barra `.cache()`, `%load_ext` e configuração
+fora da lista permitida, antes de qualquer coisa subir.
+
+---
+
+## Como foi construído
+
+### Arquitetura
 
 ```mermaid
 flowchart LR
@@ -283,16 +388,10 @@ flowchart LR
     Q -.->|barram promoção| G
 ```
 
-A ingestão é incremental por watermark, com ETag numa URL fixa funcionando como sentinela: se
-o topo da lista não mudou, a API responde `304` e o repositório é pulado sem consumir quota.
+A ingestão é incremental por watermark, com ETag numa URL fixa funcionando como sentinela: se o
+topo da lista não mudou, a API responde `304` e o repositório é pulado sem consumir quota.
 
-O teto de páginas, que já apagou histórico em silêncio uma vez, é neutralizado de dois jeitos
-diferentes conforme o que a API oferece. Em `/commits`, que aceita `until`, a coleta é fatiada
-em janelas de uma semana. Em `/issues`, que não aceita, a lista é percorrida em ordem
-crescente, então o corte pelo teto descarta os registros que a execução seguinte vai buscar de
-qualquer forma.
-
-## O modelo dimensional
+### O modelo dimensional
 
 ```mermaid
 erDiagram
@@ -306,13 +405,14 @@ erDiagram
     DIM_TEMPO       ||--o{ FCT_ISSUE : referencia
 ```
 
-Kimball define três tipos de tabela fato, e o modelo usa os três.
+Kimball define três tipos de tabela fato, e o modelo usa os três porque as perguntas exigiram os
+três.
 
 | Tabela | Tipo | Grão | O que só ela responde |
 |---|---|---|---|
 | `fct_commit` | transação | um commit | quando o trabalho aconteceu |
 | `fct_repo_snapshot` | snapshot periódico | um repositório por dia | como stars e forks evoluem |
-| `fct_issue` | snapshot acumulado | uma issue | quanto tempo um processo leva, e quanto já dura o que não terminou |
+| `fct_issue` | snapshot acumulado | uma issue | quanto já dura o que não terminou |
 
 | Dimensão | Tipo | Grão |
 |---|---|---|
@@ -320,22 +420,41 @@ Kimball define três tipos de tabela fato, e o modelo usa os três.
 | `dim_autor` | SCD1, conformada | um autor |
 | `dim_tempo` | calendário | um dia |
 
-Dois detalhes do modelo que valem mais que o desenho:
+Três detalhes valem mais que o desenho.
 
-`dim_tempo` entra em `fct_commit` com dois papéis, `sk_data_autoria` e `sk_data_commit`. Foi
-essa separação que revelou a diferença entre trabalho feito no período e história anterior
-absorvida de uma vez, e é ela que sustenta a tabela de dias da semana acima.
+`dim_tempo` entra em `fct_commit` com dois papéis, `sk_data_autoria` e `sk_data_commit`. Foi essa
+separação que revelou a diferença entre trabalho feito no período e história anterior absorvida
+de uma vez.
 
-`dim_autor` é conformada: lê das silvers de commits e de issues, porque os dois fatos apontam
-para ela e quem abre issue nem sempre commita. Construída só de commits, todo relator externo
-cairia no membro desconhecido.
+`dim_autor` lê das silvers de commits e de issues, porque os dois fatos apontam para ela e quem
+abre issue nem sempre commita.
 
 O snapshot acumulado costuma ser o mais caro dos três, porque a linha sofre `UPDATE` a cada
 marco. Aqui não precisou de mecanismo de escrita próprio: as chaves substitutas são
 determinísticas e a gold é reconstruída por `overwrite`, então o `UPDATE` acontece por
 reconstrução.
 
-## Estrutura
+### A camada de consumo
+
+O pipeline terminava na gold sem ninguém consumindo. O que faltava não era mais uma consulta —
+elas já existiam — e sim um lugar estável de onde um painel pudesse lê-las.
+
+A decisão está em onde o SQL do painel mora. Colado dentro de cada widget, ele seria uma segunda
+cópia da lógica, sem teste e livre para divergir. Materializado como tabela, congelaria a janela
+de 45 dias no dia da carga. As análises viraram **visões** sobre a gold, e cada widget é um
+`SELECT *`.
+
+Uma coluna nova saiu disso. `cobertura_do_backfill` existia desde a Etapa 6 e vivia numa célula
+separada do notebook, o que deixava a leitura correta na mão de quem lembrasse de rodar as duas
+consultas. Num painel isso não sobrevive: as colunas de issue aparecem ao lado das de commit,
+com a mesma cara de fato consolidado, e nada na tela diz que as de um repositório ainda truncado
+estão deslocadas. Agora `issues_confiavel` é coluna do painel, e o padrão de quem não sabe é
+`false` — nulo se lê como "sem problema".
+
+O layout está em [`dashboards/painel_de_saude.md`](dashboards/painel_de_saude.md), versionado
+pelo mesmo motivo que as definições de job.
+
+### Estrutura do repositório
 
 ```
 src/radar/            lógica testável, sem dependência de notebook
@@ -349,17 +468,49 @@ src/radar/            lógica testável, sem dependência de notebook
   silver_issues.py        issues e pull requests, separados
   gold.py                 dimensões, fatos, chaves substitutas determinísticas
   qualidade.py            baterias que barram promoção entre camadas
+  analises.py             as consultas que respondem as perguntas
+  consumo.py              as análises expostas como visão, para o painel
+  manutencao.py           restrições CHECK, retenção, leitura de versões
+  desempenho.py           medida de armazenamento, desbalanceamento e plano
 
 notebooks/          orquestração fina, um passo por notebook
 orquestracao/       definições dos jobs do Databricks, versionadas
-tests/              439 casos
+dashboards/         o layout do painel, versionado
+tests/              620 casos
 docs/PROJETO.md     as decisões e por que as alternativas foram rejeitadas
 ```
 
-## Rodando
+### Testes
 
-Pré-requisitos: Python 3.10+, um workspace Databricks (a Free Edition basta) e um
-fine-grained token do GitHub com permissão de leitura em repositórios públicos.
+São 620 casos, divididos por custo: 434 rodam sem subir JVM, em menos de um segundo, e 186 sobem
+uma sessão Spark local.
+
+A separação tem uma consequência que só apareceu no fim. O job de CI que roda a suíte rápida
+instala o projeto **sem pyspark**, e isso transforma numa verificação o que antes era só uma
+afirmação do documento: a lógica mora em `src/` para poder ser testada sem motor. Enquanto a
+máquina de desenvolvimento tivesse pyspark instalado, um import no topo de um módulo passaria
+despercebido.
+
+Spark local cobre schema, `from_json`, casts e deduplicação. Não cobre Delta, Volume nem Unity
+Catalog: `MERGE`, `saveAsTable` e `DESCRIBE HISTORY` seguem validados apenas no Databricks.
+
+### Orquestração
+
+Dois jobs, com cadências decididas por uma pergunta só: o dado perdido volta?
+
+| Job | Cadência | O que faz |
+|---|---|---|
+| `snapshot-diario-radar` | diária | coleta a foto de stars, forks e issues abertas |
+| `pipeline-completo-radar` | semanal | ingestão até o painel, onze tarefas em DAG |
+
+Commits têm 90 dias de histórico consultável, então uma execução perdida se conserta na seguinte.
+Stars e forks não têm passado consultável: o dia não coletado está perdido para sempre, e por
+isso ganharam job próprio.
+
+### Reproduzindo
+
+Precisa de Python 3.10+, um workspace Databricks (a Free Edition basta) e um fine-grained token
+do GitHub com leitura em repositórios públicos.
 
 ```bash
 python -m venv .venv
@@ -367,51 +518,16 @@ source .venv/Scripts/activate    # Linux/macOS: source .venv/bin/activate
 python -m pip install -e ".[dev]"
 
 cp .env.example .env            # preencha GITHUB_TOKEN
+python -m pytest -m "not spark"
 ```
 
-No Databricks, os notebooks rodam em ordem. `00` e `01` são de preparação e rodam uma vez;
-`02` em diante formam o pipeline.
+No Databricks, os notebooks rodam em ordem: `00` e `01` preparam o catálogo e o segredo, e do
+`02` ao `13` formam o pipeline. O `14` é um experimento de custo e roda à parte, à mão: ele
+grava uma tabela de escala sintética para medir o que 18 mil linhas não conseguem exercitar.
 
-## Testes
+---
 
-```bash
-python -m pytest -m "not spark"   # 294 casos, sem JVM, ~0,5s
-python -m pytest                  # 439 casos, sobe Spark local
-```
+## Documentação completa
 
-A suíte rápida não depende de Spark nem de rede. A suíte completa exige `pyspark`, que é
-dependência de desenvolvimento: no Databricks o motor vem do cluster.
-
-As duas rodam no GitHub Actions a cada push e pull request. A rápida roda em duas versões de
-Python, 3.10 e 3.12, que são os extremos do que o `pyproject.toml` declara suportar, e o faz
-instalando apenas `.[test]`, sem pyspark.
-
-Essa ausência é o ponto. A lógica mora em `src/` e não nos notebooks justamente para poder ser
-testada sem motor, e até então isso era só uma afirmação: a máquina de desenvolvimento sempre
-teve pyspark instalado. O job que instala sem ele transforma a afirmação em verificação, e um
-passo dedicado falha se pyspark entrar no grupo errado de dependências.
-
-No Windows, os testes que leem arquivo precisam de `winutils.exe` e `hadoop.dll` apontados por
-`HADOOP_HOME` no `.env`. Sem essa variável eles são pulados, não quebrados.
-
-Spark local cobre schema, `from_json`, casts e deduplicação. Não cobre Delta, Volume nem Unity
-Catalog: `MERGE`, `saveAsTable` e `DESCRIBE HISTORY` seguem validados apenas no Databricks.
-
-## Orquestração
-
-Dois jobs, com cadências diferentes decididas por uma pergunta só: o dado perdido volta?
-
-| Job | Cadência | O que faz |
-|---|---|---|
-| `snapshot-diario-radar` | diária | coleta a foto de stars, forks e issues abertas |
-| `pipeline-completo-radar` | semanal | ingestão até os fatos, nove tarefas em DAG |
-
-Commits têm 90 dias de histórico consultável, então uma execução perdida se conserta na
-seguinte. Stars e forks não têm passado consultável: o dia não coletado está perdido para
-sempre, e por isso ganharam job próprio.
-
-## Documentação
-
-[`docs/PROJETO.md`](docs/PROJETO.md) registra cada decisão com a alternativa que foi
-rejeitada e o porquê, além de um diário de bordo com os erros encontrados e o que cada um
-ensinou.
+[`docs/PROJETO.md`](docs/PROJETO.md) registra cada decisão com a alternativa que foi rejeitada e o
+porquê, mais o diário de bordo com as 29 entradas de erro e o que cada uma ensinou.

@@ -62,3 +62,22 @@ def test_cast_de_data_tolera_valor_invalido(arquivo):
     for linha in conteudo.splitlines():
         if "to_timestamp(" in linha and "try_to_timestamp(" not in linha:
             assert linha.strip().startswith("#"), f"{arquivo.name}: {linha.strip()}"
+
+
+@pytest.mark.parametrize("arquivo", FONTES + NOTEBOOKS, ids=lambda p: p.name)
+def test_prosa_de_codigo_e_ascii(arquivo):
+    # Regra 10.12: comentario, docstring e celula de notebook em ASCII, porque
+    # arquivo de codigo atravessa terminal, `diff` e log de job com
+    # codificacao que nem sempre e UTF-8, e caractere quebrado num comentario
+    # e ruido permanente. O README e o PROJETO.md usam acento normalmente.
+    #
+    # A regra existia so no documento e foi violada na primeira vez que
+    # alguem escreveu um modulo novo. E o argumento da decisao 8.11: enquanto
+    # a verificacao nao existe, a afirmacao nao se sustenta sozinha.
+    conteudo = texto(arquivo)
+    fora = {
+        (numero, linha.strip())
+        for numero, linha in enumerate(conteudo.splitlines(), start=1)
+        if not linha.isascii()
+    }
+    assert not fora, f"{arquivo.name}: {sorted(fora)[:3]}"
